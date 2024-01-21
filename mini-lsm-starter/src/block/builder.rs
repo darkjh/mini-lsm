@@ -1,11 +1,11 @@
-use bytes::BufMut;
 use super::Block;
+use bytes::BufMut;
 
 /// Builds a block.
 pub struct BlockBuilder {
     block_size: usize,
     current_size: usize,
-    kvs: Vec<(Vec<u8>, Vec<u8>)>
+    kvs: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
 impl BlockBuilder {
@@ -14,7 +14,7 @@ impl BlockBuilder {
         BlockBuilder {
             block_size,
             current_size: 0,
-            kvs: Vec::new()
+            kvs: Vec::new(),
         }
     }
 
@@ -53,9 +53,6 @@ impl BlockBuilder {
             offsets.push(current_offset);
             current_offset += key_len + value_len + 4;
         }
-        Block {
-            data,
-            offsets
-        }
+        Block { data, offsets }
     }
 }

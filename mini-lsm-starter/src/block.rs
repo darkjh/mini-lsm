@@ -2,9 +2,9 @@ mod builder;
 mod iterator;
 
 pub use builder::BlockBuilder;
+use bytes::BufMut;
 /// You may want to check `bytes::BufMut` out when manipulating continuous chunks of memory
 use bytes::{Buf, Bytes};
-use bytes::BufMut;
 pub use iterator::BlockIterator;
 
 /// A block is the smallest unit of read and caching in LSM tree.
@@ -41,7 +41,7 @@ impl Block {
         let num_of_elements = (&data[data.len() - 2..]).get_u16() as usize;
         let data_end = data.len() - 2 - num_of_elements * 2;
 
-        let offsets = &(data[data_end..data.len()-2])
+        let offsets = &(data[data_end..data.len() - 2])
             .chunks(2)
             .map(|mut x| x.get_u16())
             .collect::<Vec<u16>>();
