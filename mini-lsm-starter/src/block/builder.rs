@@ -1,3 +1,4 @@
+use bytes::BufMut;
 use super::Block;
 
 /// Builds a block.
@@ -44,9 +45,10 @@ impl BlockBuilder {
         for (key, value) in self.kvs {
             let key_len = u16::try_from(key.len()).unwrap();
             let value_len = u16::try_from(value.len()).unwrap();
-            data.extend_from_slice(&key_len.to_ne_bytes());
+
+            data.put_u16(key_len);
             data.extend_from_slice(&key);
-            data.extend_from_slice(&value_len.to_ne_bytes());
+            data.put_u16(value_len);
             data.extend_from_slice(&value);
             offsets.push(current_offset);
             current_offset += key_len + value_len + 4;
