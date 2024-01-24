@@ -92,6 +92,7 @@ impl BlockIterator {
 
     /// Seek to the first key that >= `key`.
     /// Note: You should assume the key-value pairs in the block are sorted when being added by callers.
+    // TODO stdlib's binary search does not guarantee finding the first key if duplicated keys exist
     pub fn seek_to_key(&mut self, key: &[u8]) {
         let pos = self.block.offsets.binary_search_by(|v| {
             let mut entry = &self.block.data[*v as usize..];

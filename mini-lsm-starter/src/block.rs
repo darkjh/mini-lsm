@@ -41,11 +41,11 @@ impl Block {
         let num_of_elements = (&data[data.len() - 2..]).get_u16() as usize;
         let data_end = data.len() - 2 - num_of_elements * 2;
 
-        let offsets = &(data[data_end..data.len() - 2])
+        let data = data[0..data_end].to_vec();
+        let offsets = data[data_end..data.len() - 2]
             .chunks(2)
             .map(|mut x| x.get_u16())
             .collect::<Vec<u16>>();
-        let data = (&data[0..data_end]).to_vec();
 
         Block {
             data,
