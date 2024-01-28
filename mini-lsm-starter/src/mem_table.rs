@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use bytes::Bytes;
+use crossbeam_skiplist::map::Entry;
 use crossbeam_skiplist::SkipMap;
 use ouroboros::self_referencing;
 
@@ -98,7 +99,20 @@ impl MemTable {
 
     /// Get an iterator over a range of keys.
     pub fn scan(&self, _lower: Bound<&[u8]>, _upper: Bound<&[u8]>) -> MemTableIterator {
-        unimplemented!()
+        let map = self.map.clone();
+
+        let mut iter = MemTableIteratorBuilder {
+            map,
+            iter_builder: |m: &Arc<SkipMap<Bytes, Bytes>>| {
+                m.range((map_bound(_lower), map_bound(_upper)))
+            },
+            item: (Bytes::new(), Bytes::new()),
+        }
+        .build();
+
+        let first_entry = iter.with_iter_mut(|iter| MemTableIterator::item_from_entry(iter.next()));
+        iter.with_mut(|fields| *fields.item = first_entry);
+        iter
     }
 
     /// Flush the mem-table to SSTable. Implement in week 1 day 6.
@@ -140,22 +154,35 @@ pub struct MemTableIterator {
     item: (Bytes, Bytes),
 }
 
+impl MemTableIterator {
+    // default to empty key and value
+    fn item_from_entry(entry: Option<Entry<Bytes, Bytes>>) -> (Bytes, Bytes) {
+        entry.map_or_else(
+            || (Bytes::new(), Bytes::new()),
+            |entry| (entry.key().clone(), entry.value().clone()),
+        )
+    }
+}
+
 impl StorageIterator for MemTableIterator {
     type KeyType<'a> = KeySlice<'a>;
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.borrow_item().1.as_ref()
     }
 
     fn key(&self) -> KeySlice {
-        unimplemented!()
+        KeySlice::from_slice(self.borrow_item().0.as_ref())
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        !self.borrow_item().0.is_empty()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        self.with_mut(|fields| {
+            *fields.item = MemTableIterator::item_from_entry(fields.iter.next());
+            Ok(())
+        })
     }
 }

@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, ops::Bound, path::Path, sync::Arc, time::Duration};
 
 use anyhow::{bail, Result};
 use bytes::Bytes;
@@ -9,7 +9,7 @@ use crate::{
         TieredCompactionOptions,
     },
     iterators::StorageIterator,
-    key::KeySlice,
+    key::{KeySlice, TS_ENABLED},
     lsm_storage::{BlockCache, LsmStorageInner, MiniLsm},
     table::{SsTable, SsTableBuilder},
 };
@@ -171,11 +171,12 @@ pub fn compaction_bench(storage: Arc<MiniLsm>) {
     let gen_key = |i| format!("{:010}", i); // 10B
     let gen_value = |i| format!("{:0110}", i); // 110B
     let mut max_key = 0;
+    let overlaps = if TS_ENABLED { 10000 } else { 20000 };
     for iter in 0..10 {
         let range_begin = iter * 5000;
-        for i in range_begin..(range_begin + 10000) {
+        for i in range_begin..(range_begin + overlaps) {
             // 120B per key, 4MB data populated
-            let key = gen_key(i);
+            let key: String = gen_key(i);
             let version = key_map.get(&i).copied().unwrap_or_default() + 1;
             let value = gen_value(version);
             key_map.insert(i, version);
@@ -183,18 +184,7 @@ pub fn compaction_bench(storage: Arc<MiniLsm>) {
             max_key = max_key.max(i);
         }
     }
-
-    for i in 0..(max_key + 40000) {
-        let key = gen_key(i);
-        let value = storage.get(key.as_bytes()).unwrap();
-        if let Some(val) = key_map.get(&i) {
-            let expected_value = gen_value(*val);
-            assert_eq!(value, Some(Bytes::from(expected_value)));
-        } else {
-            assert!(value.is_none());
-        }
-    }
-
+    std::thread::sleep(Duration::from_secs(1)); // wait until all memtables flush
     while {
         let snapshot = storage.inner.state.read();
         !snapshot.imm_memtables.is_empty()
@@ -213,6 +203,24 @@ pub fn compaction_bench(storage: Arc<MiniLsm>) {
     } {
         println!("waiting for compaction to converge");
     }
+
+    let mut expected_key_value_pairs = Vec::new();
+    for i in 0..(max_key + 40000) {
+        let key = gen_key(i);
+        let value = storage.get(key.as_bytes()).unwrap();
+        if let Some(val) = key_map.get(&i) {
+            let expected_value = gen_value(*val);
+            assert_eq!(value, Some(Bytes::from(expected_value.clone())));
+            expected_key_value_pairs.push((Bytes::from(key), Bytes::from(expected_value)));
+        } else {
+            assert!(value.is_none());
+        }
+    }
+
+    check_lsm_iter_result_by_key(
+        &mut storage.scan(Bound::Unbounded, Bound::Unbounded).unwrap(),
+        expected_key_value_pairs,
+    );
 
     storage.dump_structure();
 
@@ -235,6 +243,11 @@ pub fn check_compaction_ratio(storage: Arc<MiniLsm>) {
         };
         level_size.push(size);
     }
+    let num_iters = storage
+        .scan(Bound::Unbounded, Bound::Unbounded)
+        .unwrap()
+        .num_active_iterators();
+    let num_memtables = storage.inner.state.read().imm_memtables.len() + 1;
     match compaction_options {
         CompactionOptions::NoCompaction => unreachable!(),
         CompactionOptions::Simple(SimpleLeveledCompactionOptions {
@@ -260,6 +273,10 @@ pub fn check_compaction_ratio(storage: Arc<MiniLsm>) {
                     size_ratio_percent
                 );
             }
+            assert!(
+                num_iters <= l0_sst_num + num_memtables + max_levels,
+                "did you use concat iterators?"
+            );
         }
         CompactionOptions::Leveled(LeveledCompactionOptions {
             level_size_multiplier,
@@ -283,6 +300,10 @@ pub fn check_compaction_ratio(storage: Arc<MiniLsm>) {
                     level_size_multiplier
                 );
             }
+            assert!(
+                num_iters <= l0_sst_num + num_memtables + max_levels,
+                "did you use concat iterators?"
+            );
         }
         CompactionOptions::Tiered(TieredCompactionOptions {
             num_tiers,
@@ -321,6 +342,16 @@ pub fn check_compaction_ratio(storage: Arc<MiniLsm>) {
                 }
                 sum_size += this_size;
             }
+            assert!(
+                num_iters <= num_memtables + num_tiers,
+                "did you use concat iterators?"
+            );
         }
+    }
+}
+
+pub fn dump_files_in_dir(path: impl AsRef<Path>) {
+    for f in path.as_ref().read_dir().unwrap() {
+        println!("{}", f.unwrap().path().display())
     }
 }
