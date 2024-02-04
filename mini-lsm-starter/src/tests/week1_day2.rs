@@ -84,6 +84,35 @@ fn test_task1_empty_memtable_iter() {
 }
 
 #[test]
+fn test_simple() {
+    let i1 = MockIterator::new(vec![
+        (Bytes::from("b"), Bytes::new()),
+        (Bytes::from("c"), Bytes::from("4")),
+        (Bytes::from("d"), Bytes::from("5")),
+    ]);
+    let i2 = MockIterator::new(vec![
+        (Bytes::from("a"), Bytes::from("1")),
+        (Bytes::from("b"), Bytes::from("2")),
+        (Bytes::from("c"), Bytes::from("5")),
+    ]);
+    let i3 = MockIterator::new(vec![(Bytes::from("e"), Bytes::from("4"))]);
+    let mut iter = MergeIterator::create(vec![
+        Box::new(i1.clone()),
+        Box::new(i2.clone()),
+        Box::new(i3.clone()),
+    ]);
+
+    while iter.is_valid() {
+        println!(
+            "{:?} -> {:?}",
+            String::from_utf8(iter.key().into_inner().to_vec()),
+            String::from_utf8(iter.value().to_vec())
+        );
+        let _ = iter.next();
+    }
+}
+
+#[test]
 fn test_task2_merge_1() {
     let i1 = MockIterator::new(vec![
         (Bytes::from("a"), Bytes::from("1.1")),
