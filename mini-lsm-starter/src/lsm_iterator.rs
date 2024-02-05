@@ -1,7 +1,4 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 use crate::{
     iterators::{merge_iterator::MergeIterator, StorageIterator},
@@ -17,7 +14,17 @@ pub struct LsmIterator {
 
 impl LsmIterator {
     pub(crate) fn new(iter: LsmIteratorInner) -> Result<Self> {
-        Ok(Self { inner: iter })
+        let mut lsm_iter = Self { inner: iter };
+
+        // In case that first values are empty
+        while lsm_iter.is_valid() && lsm_iter.value().is_empty() {
+            match lsm_iter.next() {
+                Ok(_) => {}
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(lsm_iter)
     }
 }
 
@@ -25,19 +32,28 @@ impl StorageIterator for LsmIterator {
     type KeyType<'a> = &'a [u8];
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.inner.is_valid()
     }
 
     fn key(&self) -> &[u8] {
-        unimplemented!()
+        self.inner.key().into_inner()
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.inner.value()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        loop {
+            match self.inner.next() {
+                Ok(_) => {
+                    if !self.inner.is_valid() || !self.inner.value().is_empty() {
+                        return Ok(());
+                    }
+                }
+                e @ Err(_) => return e,
+            }
+        }
     }
 }
 
@@ -46,14 +62,14 @@ impl StorageIterator for LsmIterator {
 /// `is_valid` should return false, and `next` should always return an error.
 pub struct FusedIterator<I: StorageIterator> {
     iter: I,
-    has_errored: bool,
+    errored: bool,
 }
 
 impl<I: StorageIterator> FusedIterator<I> {
     pub fn new(iter: I) -> Self {
         Self {
             iter,
-            has_errored: false,
+            errored: false,
         }
     }
 }
@@ -62,18 +78,35 @@ impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
     type KeyType<'a> = I::KeyType<'a> where Self: 'a;
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        !self.errored && self.iter.is_valid()
     }
 
     fn key(&self) -> Self::KeyType<'_> {
-        unimplemented!()
+        if self.errored || !self.iter.is_valid() {
+            panic!("underlying iterator error")
+        }
+        self.iter.key()
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        if self.errored || !self.iter.is_valid() {
+            panic!("underlying iterator error")
+        }
+        self.iter.value()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        if self.errored {
+            bail!("underlying iterator has errored");
+        }
+
+        if self.iter.is_valid() {
+            if let e @ Err(_) = self.iter.next() {
+                self.errored = true;
+                return e;
+            }
+        }
+
+        Ok(())
     }
 }
