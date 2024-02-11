@@ -37,6 +37,10 @@ impl BlockBuilder {
             return false;
         }
 
+        if self.first_key.is_empty() {
+            self.first_key.set_from_slice(key);
+        }
+
         self.offsets.push(self.data.len() as u16);
         self.data.put_u16(key.len() as u16);
         self.data.put(key.into_inner());
