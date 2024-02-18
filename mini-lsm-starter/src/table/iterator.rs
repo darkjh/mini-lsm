@@ -19,7 +19,7 @@ impl SsTableIterator {
             bail!("Empty sstable")
         }
 
-        let blk_iter = BlockIterator::create_and_seek_to_first(table.read_block(0)?);
+        let blk_iter = BlockIterator::create_and_seek_to_first(table.read_block_cached(0)?);
 
         Ok(SsTableIterator {
             table,
@@ -35,7 +35,7 @@ impl SsTableIterator {
         }
 
         self.blk_idx = 0;
-        self.blk_iter = BlockIterator::create_and_seek_to_first(self.table.read_block(0)?);
+        self.blk_iter = BlockIterator::create_and_seek_to_first(self.table.read_block_cached(0)?);
         Ok(())
     }
 
@@ -50,7 +50,7 @@ impl SsTableIterator {
         let blk_iter = if block_idx >= table.num_of_blocks() {
             BlockIterator::empty()
         } else {
-            let block = table.read_block(block_idx)?;
+            let block = table.read_block_cached(block_idx)?;
             BlockIterator::create_and_seek_to_key(block, key)
         };
 
@@ -70,7 +70,7 @@ impl SsTableIterator {
         if block_idx >= self.table.num_of_blocks() {
             self.blk_iter = BlockIterator::empty();
         } else {
-            let block = self.table.read_block(block_idx)?;
+            let block = self.table.read_block_cached(block_idx)?;
 
             self.blk_idx = block_idx;
             self.blk_iter = BlockIterator::create_and_seek_to_key(block, key);
@@ -106,8 +106,9 @@ impl StorageIterator for SsTableIterator {
             if self.blk_idx + 1 < self.table.num_of_blocks() {
                 // switch to next block
                 self.blk_idx += 1;
-                let next_blk_iter =
-                    BlockIterator::create_and_seek_to_first(self.table.read_block(self.blk_idx)?);
+                let next_blk_iter = BlockIterator::create_and_seek_to_first(
+                    self.table.read_block_cached(self.blk_idx)?,
+                );
                 let invalid_iter = std::mem::replace(&mut self.blk_iter, next_blk_iter);
                 drop(invalid_iter);
             }
