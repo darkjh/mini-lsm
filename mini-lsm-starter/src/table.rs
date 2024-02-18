@@ -6,7 +6,7 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 pub use builder::SsTableBuilder;
 use bytes::{Buf, BufMut, Bytes};
 pub use iterator::SsTableIterator;
@@ -181,19 +181,45 @@ impl SsTable {
 
     /// Read a block from the disk.
     pub fn read_block(&self, block_idx: usize) -> Result<Arc<Block>> {
-        unimplemented!()
+        if block_idx >= self.block_meta.len() {
+            bail!("Invalid block index: {}", block_idx)
+        }
+
+        let block_start = self.block_meta.get(block_idx).unwrap().offset as u64;
+        let block_end = self
+            .block_meta
+            .get(block_idx + 1)
+            .map(|x| x.offset)
+            .unwrap_or_else(|| self.block_meta_offset) as u64;
+        Ok(Arc::new(Block::decode(
+            &self.file.read(block_start, block_end - block_start)?,
+        )))
     }
 
     /// Read a block from disk, with block cache. (Day 4)
     pub fn read_block_cached(&self, block_idx: usize) -> Result<Arc<Block>> {
-        unimplemented!()
+        self.read_block(block_idx)
     }
 
     /// Find the block that may contain `key`.
     /// Note: You may want to make use of the `first_key` stored in `BlockMeta`.
     /// You may also assume the key-value pairs stored in each consecutive block are sorted.
     pub fn find_block_idx(&self, key: KeySlice) -> usize {
-        unimplemented!()
+        if key < self.block_meta.first().unwrap().first_key.as_key_slice() {
+            return 0;
+        }
+
+        // TODO use binary search
+        // TODO how to handle duplicated entries
+        for (idx, meta) in self.block_meta.iter().enumerate() {
+            if key >= meta.first_key.as_key_slice() && key <= meta.last_key.as_key_slice() {
+                return idx;
+            }
+        }
+
+        // Returns out-of-range block id when key is not found
+        // The iterator should be invalid if the key is not found
+        self.block_meta.len()
     }
 
     /// Get number of data blocks.
