@@ -30,6 +30,13 @@ impl BlockIterator {
         }
     }
 
+    pub(crate) fn empty() -> BlockIterator {
+        BlockIterator::create_and_seek_to_first(Arc::new(Block {
+            data: Vec::new(),
+            offsets: Vec::new(),
+        }))
+    }
+
     /// Creates a block iterator and seek to the first entry.
     pub fn create_and_seek_to_first(block: Arc<Block>) -> Self {
         let mut iter = BlockIterator::new(block);
