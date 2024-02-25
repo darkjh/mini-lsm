@@ -282,19 +282,46 @@ impl LsmStorageInner {
     }
 
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
-    pub fn get(&self, _key: &[u8]) -> Result<Option<Bytes>> {
-        let guard = self.state.read();
+    pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
+        let snapshot = { self.state.read().clone() };
 
-        match guard.memtable.get(_key) {
+        match snapshot.memtable.get(key) {
             Some(bytes) if bytes.len() == 0 => Ok(None),
             Some(bytes) => Ok(Some(bytes)),
             None => {
-                for memtable in &guard.imm_memtables {
-                    if let Some(bytes) = memtable.get(_key) {
-                        return if bytes.len() == 0 {
+                for memtable in &snapshot.imm_memtables {
+                    if let Some(bytes) = memtable.get(key) {
+                        return if bytes.is_empty() {
+                            // deleted
                             Ok(None)
                         } else {
                             Ok(Some(bytes))
+                        };
+                    }
+                }
+
+                // no result in memtables, lookup in sstables by using a scan
+                let sstable_iter = {
+                    let iters: Result<Vec<Box<SsTableIterator>>> = snapshot
+                        .l0_sstables
+                        .iter()
+                        .map(|idx| {
+                            let iter = SsTableIterator::create_and_seek_to_key(
+                                snapshot.sstables.get(idx).unwrap().clone(),
+                                KeySlice::from_slice(key),
+                            )?;
+                            Ok(Box::new(iter))
+                        })
+                        .collect();
+                    MergeIterator::create(iters?)
+                };
+                if sstable_iter.is_valid() {
+                    if sstable_iter.key() == KeySlice::from_slice(key) {
+                        return if sstable_iter.value().is_empty() {
+                            // deleted
+                            Ok(None)
+                        } else {
+                            Ok(Some(Bytes::copy_from_slice(sstable_iter.value())))
                         };
                     }
                 }
