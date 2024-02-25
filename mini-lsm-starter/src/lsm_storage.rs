@@ -16,11 +16,14 @@ use crate::compact::{
     SimpleLeveledCompactionController, SimpleLeveledCompactionOptions, TieredCompactionController,
 };
 use crate::iterators::merge_iterator::MergeIterator;
+use crate::iterators::two_merge_iterator::TwoMergeIterator;
+use crate::iterators::StorageIterator;
+use crate::key::KeySlice;
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
-use crate::mem_table::MemTable;
+use crate::mem_table::{map_bound, MemTable};
 use crate::mvcc::LsmMvccInner;
-use crate::table::SsTable;
+use crate::table::{SsTable, SsTableIterator};
 
 pub type BlockCache = moka::sync::Cache<(usize, usize), Arc<Block>>;
 
@@ -404,7 +407,42 @@ impl LsmStorageInner {
                 .iter()
                 .map(|x| Box::new(x.scan(_lower, _upper))),
         );
+        let memtable_iter = MergeIterator::create(iters);
 
-        LsmIterator::new(MergeIterator::create(iters)).map(|x| FusedIterator::new(x))
+        let sstable_iter = {
+            let iters: Result<Vec<Box<SsTableIterator>>> = guard
+                .l0_sstables
+                .iter()
+                .map(|idx| {
+                    let iter = match _lower {
+                        Bound::Unbounded => SsTableIterator::create_and_seek_to_first(
+                            guard.sstables.get(idx).unwrap().clone(),
+                        )?,
+                        Bound::Included(lb) => SsTableIterator::create_and_seek_to_key(
+                            guard.sstables.get(idx).unwrap().clone(),
+                            KeySlice::from_slice(lb),
+                        )?,
+                        Bound::Excluded(lb) => {
+                            let mut iter = SsTableIterator::create_and_seek_to_key(
+                                guard.sstables.get(idx).unwrap().clone(),
+                                KeySlice::from_slice(lb),
+                            )?;
+
+                            // exclude the excluded bound
+                            if iter.is_valid() && iter.key().raw_ref() == lb {
+                                iter.next()?
+                            }
+                            iter
+                        }
+                    };
+
+                    Ok(Box::new(iter))
+                })
+                .collect();
+            MergeIterator::create(iters?)
+        };
+
+        LsmIterator::new(TwoMergeIterator::create(memtable_iter, sstable_iter)?)
+            .map(|x| FusedIterator::new(x))
     }
 }

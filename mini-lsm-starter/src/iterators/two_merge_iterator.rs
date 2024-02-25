@@ -1,6 +1,3 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use anyhow::Result;
 
 use super::StorageIterator;
@@ -10,7 +7,7 @@ use super::StorageIterator;
 pub struct TwoMergeIterator<A: StorageIterator, B: StorageIterator> {
     a: A,
     b: B,
-    // Add fields as need
+    should_read_a: bool,
 }
 
 impl<
@@ -19,7 +16,29 @@ impl<
     > TwoMergeIterator<A, B>
 {
     pub fn create(a: A, b: B) -> Result<Self> {
-        unimplemented!()
+        let should_read_a = Self::should_read_a(&a, &b);
+        Ok(TwoMergeIterator {
+            a,
+            b,
+            should_read_a,
+        })
+    }
+
+    fn should_read_a(a: &A, b: &B) -> bool {
+        if !a.is_valid() {
+            false
+        } else if !b.is_valid() {
+            true
+        } else if !a.is_valid() && !b.is_valid() {
+            // does not matter, the merged iterator is simply not valid
+            true
+        } else {
+            if a.key() <= b.key() {
+                true
+            } else {
+                false
+            }
+        }
     }
 }
 
@@ -31,18 +50,45 @@ impl<
     type KeyType<'a> = A::KeyType<'a>;
 
     fn key(&self) -> Self::KeyType<'_> {
-        unimplemented!()
+        if self.should_read_a {
+            self.a.key()
+        } else {
+            self.b.key()
+        }
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        if self.should_read_a {
+            self.a.value()
+        } else {
+            self.b.value()
+        }
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.a.is_valid() || self.b.is_valid()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        if self.should_read_a {
+            // skip values in b if necessary
+            if self.a.is_valid() && self.b.is_valid() {
+                if self.a.key() == self.b.key() {
+                    self.a.next()?;
+                    self.b.next()?;
+                } else {
+                    self.a.next()?
+                }
+            } else {
+                self.a.next()?;
+            }
+        } else {
+            if self.b.is_valid() {
+                self.b.next()?;
+            }
+        }
+
+        self.should_read_a = Self::should_read_a(&self.a, &self.b);
+        Ok(())
     }
 }
