@@ -396,35 +396,40 @@ impl LsmStorageInner {
     /// Create an iterator over a range of keys.
     pub fn scan(
         &self,
-        _lower: Bound<&[u8]>,
-        _upper: Bound<&[u8]>,
+        lower: Bound<&[u8]>,
+        upper: Bound<&[u8]>,
     ) -> Result<FusedIterator<LsmIterator>> {
-        let guard = self.state.read();
-        let mut iters = vec![Box::new(guard.memtable.scan(_lower, _upper))];
+        let snapshot = {
+            self.state.read().clone()
+            // drop the read lock as the iterator creation can take some time
+            // it's effective a pointer to a snapshot of lsm state
+            // the state itself can be modified but the snapshot should be stable
+        };
+        let mut iters = vec![Box::new(snapshot.memtable.scan(lower, upper))];
         iters.extend(
-            guard
+            snapshot
                 .imm_memtables
                 .iter()
-                .map(|x| Box::new(x.scan(_lower, _upper))),
+                .map(|x| Box::new(x.scan(lower, upper))),
         );
         let memtable_iter = MergeIterator::create(iters);
 
         let sstable_iter = {
-            let iters: Result<Vec<Box<SsTableIterator>>> = guard
+            let iters: Result<Vec<Box<SsTableIterator>>> = snapshot
                 .l0_sstables
                 .iter()
                 .map(|idx| {
-                    let iter = match _lower {
+                    let iter = match lower {
                         Bound::Unbounded => SsTableIterator::create_and_seek_to_first(
-                            guard.sstables.get(idx).unwrap().clone(),
+                            snapshot.sstables.get(idx).unwrap().clone(),
                         )?,
                         Bound::Included(lb) => SsTableIterator::create_and_seek_to_key(
-                            guard.sstables.get(idx).unwrap().clone(),
+                            snapshot.sstables.get(idx).unwrap().clone(),
                             KeySlice::from_slice(lb),
                         )?,
                         Bound::Excluded(lb) => {
                             let mut iter = SsTableIterator::create_and_seek_to_key(
-                                guard.sstables.get(idx).unwrap().clone(),
+                                snapshot.sstables.get(idx).unwrap().clone(),
                                 KeySlice::from_slice(lb),
                             )?;
 
@@ -444,7 +449,7 @@ impl LsmStorageInner {
 
         LsmIterator::new(
             TwoMergeIterator::create(memtable_iter, sstable_iter)?,
-            map_bound(_upper),
+            map_bound(upper),
         )
         .map(|x| FusedIterator::new(x))
     }
