@@ -1,4 +1,6 @@
 use anyhow::{bail, Result};
+use bytes::Bytes;
+use std::ops::Bound;
 
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::table::SsTableIterator;
@@ -11,14 +13,14 @@ use crate::{
 type LsmIteratorInner =
     TwoMergeIterator<MergeIterator<MemTableIterator>, MergeIterator<SsTableIterator>>;
 
-// TODO handle end bound here
 pub struct LsmIterator {
     inner: LsmIteratorInner,
+    upper: Bound<Bytes>,
 }
 
 impl LsmIterator {
-    pub(crate) fn new(iter: LsmIteratorInner) -> Result<Self> {
-        let mut lsm_iter = Self { inner: iter };
+    pub(crate) fn new(iter: LsmIteratorInner, upper: Bound<Bytes>) -> Result<Self> {
+        let mut lsm_iter = Self { inner: iter, upper };
 
         // In case that first values are empty
         while lsm_iter.is_valid() && lsm_iter.value().is_empty() {
@@ -30,13 +32,21 @@ impl LsmIterator {
 
         Ok(lsm_iter)
     }
+
+    fn is_out_of_bound(&self, key: &[u8]) -> bool {
+        match self.upper.as_ref() {
+            Bound::Unbounded => false,
+            Bound::Included(up) => key > up,
+            Bound::Excluded(up) => key >= up,
+        }
+    }
 }
 
 impl StorageIterator for LsmIterator {
     type KeyType<'a> = &'a [u8];
 
     fn is_valid(&self) -> bool {
-        self.inner.is_valid()
+        self.inner.is_valid() && !self.is_out_of_bound(self.inner.key().raw_ref())
     }
 
     fn key(&self) -> &[u8] {

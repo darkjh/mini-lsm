@@ -442,7 +442,10 @@ impl LsmStorageInner {
             MergeIterator::create(iters?)
         };
 
-        LsmIterator::new(TwoMergeIterator::create(memtable_iter, sstable_iter)?)
-            .map(|x| FusedIterator::new(x))
+        LsmIterator::new(
+            TwoMergeIterator::create(memtable_iter, sstable_iter)?,
+            map_bound(_upper),
+        )
+        .map(|x| FusedIterator::new(x))
     }
 }
