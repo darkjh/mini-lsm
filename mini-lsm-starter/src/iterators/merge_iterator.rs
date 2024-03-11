@@ -119,17 +119,20 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
             }
         }
 
+        // call next() on the current iter
         let mut current_iter = self.current.take().unwrap();
         match current_iter.iter.next() {
             Ok(_) => {
                 // make sure only valid iterator is pushed back into the heap
                 if current_iter.iter.is_valid() {
+                    // push back the current iter to the heap to re-order
                     self.iters.push(current_iter);
                 }
             }
             e @ Err(_) => return e,
         }
 
+        // take one iter out of the heap
         let mut next = self.iters.pop().take();
         while next.is_some() {
             let n = next.unwrap();
@@ -141,5 +144,19 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
             }
         }
         Ok(())
+    }
+
+    fn num_active_iterators(&self) -> usize {
+        let a = self
+            .iters
+            .iter()
+            .map(|i| i.iter.num_active_iterators())
+            .sum::<usize>();
+        let b = self
+            .current
+            .as_ref()
+            .map(|i| i.iter.num_active_iterators())
+            .unwrap_or(0);
+        a + b
     }
 }
