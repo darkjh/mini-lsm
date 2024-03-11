@@ -23,7 +23,7 @@ use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
 use crate::mem_table::{map_bound, MemTable};
 use crate::mvcc::LsmMvccInner;
-use crate::table::{SsTable, SsTableIterator};
+use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
 pub type BlockCache = moka::sync::Cache<(usize, usize), Arc<Block>>;
 
@@ -125,6 +125,7 @@ pub enum CompactionFilter {
 /// The storage interface of the LSM tree.
 pub(crate) struct LsmStorageInner {
     pub(crate) state: Arc<RwLock<Arc<LsmStorageState>>>,
+    // for mutating lsm structure
     pub(crate) state_lock: Mutex<()>,
     path: PathBuf,
     pub(crate) block_cache: Arc<BlockCache>,
@@ -158,7 +159,14 @@ impl Drop for MiniLsm {
 
 impl MiniLsm {
     pub fn close(&self) -> Result<()> {
-        unimplemented!()
+        self.flush_notifier.send(()).ok();
+        let mut flush_thread = self.flush_thread.lock();
+        if let Some(flush_thread) = flush_thread.take() {
+            flush_thread
+                .join()
+                .map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        }
+        Ok(())
     }
 
     /// Start the storage engine by either loading an existing directory or creating a new one if the directory does
@@ -405,14 +413,49 @@ impl LsmStorageInner {
                 .insert(0, state_snapshot.memtable);
             state_snapshot.memtable = new_memtable;
 
-            (*guard) = Arc::new(state_snapshot);
+            *guard = Arc::new(state_snapshot);
         }
         Ok(())
     }
 
     /// Force flush the earliest-created immutable memtable to disk
     pub fn force_flush_next_imm_memtable(&self) -> Result<()> {
-        unimplemented!()
+        // exclusive access to lsm structure
+        let _lock = self.state_lock.lock();
+
+        let last_memtable = { self.state.read().imm_memtables.last().unwrap().clone() };
+        let last_memtable_id = last_memtable.id();
+
+        let mut builder = SsTableBuilder::new(self.options.block_size);
+        last_memtable.flush(&mut builder)?;
+
+        let sst_id = self.next_sst_id();
+        let sstable = builder.build(
+            sst_id,
+            Some(self.block_cache.clone()),
+            self.path_of_sst(sst_id),
+        )?;
+        let sstable_size = sstable.table_size();
+
+        {
+            let mut guard = self.state.write();
+
+            let mut state_snapshot = guard.as_ref().clone();
+            state_snapshot.sstables.insert(sst_id, Arc::new(sstable));
+            state_snapshot.l0_sstables.insert(0, sst_id);
+
+            // finally remove the flushed memtable
+            if state_snapshot.imm_memtables.last().unwrap().id() == last_memtable_id {
+                let _ = state_snapshot.imm_memtables.pop();
+            }
+
+            *guard = Arc::new(state_snapshot);
+        }
+        println!(
+            "Flushed memtable id={:?} size={:?}",
+            last_memtable_id, sstable_size
+        );
+        Ok(())
     }
 
     pub fn new_txn(&self) -> Result<()> {
@@ -445,18 +488,30 @@ impl LsmStorageInner {
             let iters: Result<Vec<Box<SsTableIterator>>> = snapshot
                 .l0_sstables
                 .iter()
+                .filter(|idx| {
+                    let table = snapshot.sstables.get(idx).unwrap().clone();
+                    // skip sstable if there's no intersection
+                    match upper {
+                        Bound::Included(ub) => {
+                            table.first_key().as_key_slice() <= KeySlice::from_slice(ub)
+                        }
+                        Bound::Excluded(ub) => {
+                            table.first_key().as_key_slice() < KeySlice::from_slice(ub)
+                        }
+                        Bound::Unbounded => true,
+                    }
+                })
                 .map(|idx| {
+                    let table = snapshot.sstables.get(idx).unwrap().clone();
                     let iter = match lower {
-                        Bound::Unbounded => SsTableIterator::create_and_seek_to_first(
-                            snapshot.sstables.get(idx).unwrap().clone(),
-                        )?,
+                        Bound::Unbounded => SsTableIterator::create_and_seek_to_first(table)?,
                         Bound::Included(lb) => SsTableIterator::create_and_seek_to_key(
-                            snapshot.sstables.get(idx).unwrap().clone(),
+                            table,
                             KeySlice::from_slice(lb),
                         )?,
                         Bound::Excluded(lb) => {
                             let mut iter = SsTableIterator::create_and_seek_to_key(
-                                snapshot.sstables.get(idx).unwrap().clone(),
+                                table,
                                 KeySlice::from_slice(lb),
                             )?;
 
