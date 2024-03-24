@@ -294,7 +294,7 @@ impl LsmStorageInner {
         let snapshot = { self.state.read().clone() };
 
         match snapshot.memtable.get(key) {
-            Some(bytes) if bytes.len() == 0 => Ok(None),
+            Some(bytes) if bytes.is_empty() => Ok(None),
             Some(bytes) => Ok(Some(bytes)),
             None => {
                 for memtable in &snapshot.imm_memtables {
@@ -533,6 +533,6 @@ impl LsmStorageInner {
             TwoMergeIterator::create(memtable_iter, sstable_iter)?,
             map_bound(upper),
         )
-        .map(|x| FusedIterator::new(x))
+        .map(FusedIterator::new)
     }
 }

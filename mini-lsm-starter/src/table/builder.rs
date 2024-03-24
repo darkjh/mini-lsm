@@ -89,10 +89,10 @@ impl SsTableBuilder {
         let file = FileObject::create(path.as_ref(), self.data)?;
 
         let first_key = KeyBytes::from_bytes(Bytes::copy_from_slice(
-            &self.meta.first().unwrap().first_key.raw_ref().to_vec(),
+            self.meta.first().unwrap().first_key.raw_ref(),
         ));
         let last_key = KeyBytes::from_bytes(Bytes::copy_from_slice(
-            &self.meta.last().unwrap().last_key.raw_ref().to_vec(),
+            self.meta.last().unwrap().last_key.raw_ref(),
         ));
 
         let sst = SsTable {
