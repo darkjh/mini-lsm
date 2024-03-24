@@ -33,11 +33,7 @@ impl<
             // does not matter, the merged iterator is simply not valid
             true
         } else {
-            if a.key() <= b.key() {
-                true
-            } else {
-                false
-            }
+            a.key() <= b.key()
         }
     }
 }
