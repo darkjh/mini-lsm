@@ -313,6 +313,13 @@ impl LsmStorageInner {
                     let iters: Result<Vec<Box<SsTableIterator>>> = snapshot
                         .l0_sstables
                         .iter()
+                        .filter(|idx| {
+                            let table = snapshot.sstables.get(idx).unwrap().as_ref();
+                            match &table.bloom {
+                                Some(b) => b.may_contain(farmhash::fingerprint32(&key)),
+                                None => true,
+                            }
+                        })
                         .map(|idx| {
                             let iter = SsTableIterator::create_and_seek_to_key(
                                 snapshot.sstables.get(idx).unwrap().clone(),
