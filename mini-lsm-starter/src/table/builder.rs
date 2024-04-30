@@ -7,6 +7,7 @@ use bytes::Bytes;
 
 use super::{BlockMeta, FileObject, SsTable};
 use crate::key::KeyBytes;
+use crate::table::bloom::Bloom;
 use crate::{block::BlockBuilder, key::KeySlice, lsm_storage::BlockCache};
 
 /// Builds an SSTable from key-value pairs.
@@ -17,6 +18,8 @@ pub struct SsTableBuilder {
     data: Vec<u8>,
     pub(crate) meta: Vec<BlockMeta>,
     block_size: usize,
+    // bloom filter for sst filtering
+    key_hashes: Vec<u32>,
 }
 
 impl SsTableBuilder {
@@ -29,6 +32,7 @@ impl SsTableBuilder {
             data: Vec::new(),
             meta: Vec::new(),
             block_size,
+            key_hashes: Vec::new(),
         }
     }
 
@@ -47,6 +51,8 @@ impl SsTableBuilder {
             // it's guaranteed to success for the first entry
             let _ = self.builder.add(key, value);
         }
+        self.key_hashes
+            .push(farmhash::fingerprint32(key.into_inner()));
 
         self.last_key.clear();
         self.last_key.extend(key.into_inner())
@@ -86,6 +92,13 @@ impl SsTableBuilder {
         BlockMeta::encode_block_meta(&self.meta, &mut self.data);
         self.data.put_u32(block_meta_offset as u32);
 
+        let bits_per_key = Bloom::bloom_bits_per_key(self.key_hashes.len(), 0.01);
+        let bloom = Bloom::build_from_key_hashes(&self.key_hashes, bits_per_key);
+
+        let bloom_filter_offset = self.data.len();
+        bloom.encode(&mut self.data);
+        self.data.put_u32(bloom_filter_offset as u32);
+
         let file = FileObject::create(path.as_ref(), self.data)?;
 
         let first_key = KeyBytes::from_bytes(Bytes::copy_from_slice(
@@ -103,7 +116,7 @@ impl SsTableBuilder {
             block_cache,
             first_key,
             last_key,
-            bloom: None,
+            bloom: Some(bloom),
             max_ts: 0u64,
         };
         Ok(sst)
