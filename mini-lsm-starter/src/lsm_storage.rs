@@ -436,11 +436,10 @@ impl LsmStorageInner {
         let mut builder = SsTableBuilder::new(self.options.block_size);
         last_memtable.flush(&mut builder)?;
 
-        let sst_id = self.next_sst_id();
         let sstable = builder.build(
-            sst_id,
+            last_memtable_id,
             Some(self.block_cache.clone()),
-            self.path_of_sst(sst_id),
+            self.path_of_sst(last_memtable_id),
         )?;
         let sstable_size = sstable.table_size();
 
@@ -448,8 +447,10 @@ impl LsmStorageInner {
             let mut guard = self.state.write();
 
             let mut state_snapshot = guard.as_ref().clone();
-            state_snapshot.sstables.insert(sst_id, Arc::new(sstable));
-            state_snapshot.l0_sstables.insert(0, sst_id);
+            state_snapshot
+                .sstables
+                .insert(last_memtable_id, Arc::new(sstable));
+            state_snapshot.l0_sstables.insert(0, last_memtable_id);
 
             // finally remove the flushed memtable
             if state_snapshot.imm_memtables.last().unwrap().id() == last_memtable_id {
