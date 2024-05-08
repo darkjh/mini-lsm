@@ -15,6 +15,7 @@ use crate::compact::{
     CompactionController, CompactionOptions, LeveledCompactionController, LeveledCompactionOptions,
     SimpleLeveledCompactionController, SimpleLeveledCompactionOptions, TieredCompactionController,
 };
+use crate::iterators::concat_iterator::SstConcatIterator;
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::iterators::StorageIterator;
@@ -310,7 +311,7 @@ impl LsmStorageInner {
 
                 // no result in memtables, lookup in sstables by using a scan
                 let sstable_iter = {
-                    let iters: Result<Vec<Box<SsTableIterator>>> = snapshot
+                    let l0_iters: Result<Vec<Box<SsTableIterator>>> = snapshot
                         .l0_sstables
                         .iter()
                         .filter(|idx| {
@@ -328,7 +329,24 @@ impl LsmStorageInner {
                             Ok(Box::new(iter))
                         })
                         .collect();
-                    MergeIterator::create(iters?)
+
+                    let l1_iters = {
+                        let tables: Vec<Arc<SsTable>> = snapshot.levels[0]
+                            .1
+                            .iter()
+                            .filter(|idx| {
+                                let table = snapshot.sstables.get(idx).unwrap().as_ref();
+                                match &table.bloom {
+                                    Some(b) => b.may_contain(farmhash::fingerprint32(&key)),
+                                    None => true,
+                                }
+                            })
+                            .map(|idx| snapshot.sstables.get(idx).unwrap().clone())
+                            .collect();
+                        SstConcatIterator::create_and_seek_to_key(tables, KeySlice::from_slice(key))
+                    };
+
+                    TwoMergeIterator::create(MergeIterator::create(l0_iters?), l1_iters?)?
                 };
                 if sstable_iter.is_valid() {
                     if sstable_iter.key() == KeySlice::from_slice(key) {
@@ -496,6 +514,7 @@ impl LsmStorageInner {
             let iters: Result<Vec<Box<SsTableIterator>>> = snapshot
                 .l0_sstables
                 .iter()
+                .chain(snapshot.levels[0].1.iter())
                 .filter(|idx| {
                     let table = snapshot.sstables.get(idx).unwrap().clone();
                     // skip sstable if there's no intersection
