@@ -193,15 +193,17 @@ fn test_task2_concat_iterator() {
 
     // extra tests
     let mut iter = SstConcatIterator::create_and_seek_to_first(sstables.clone()).unwrap();
-    let mut count = 10;
+    let mut key = 10;
+    let mut count = 0;
 
     while iter.is_valid() {
         assert_eq!(
             iter.key().for_testing_key_ref(),
-            format!("{:05}", count).as_bytes()
+            format!("{:05}", key).as_bytes()
         );
         iter.next().unwrap();
         count += 1;
+        key += 1;
     }
     assert_eq!(count, 100);
 }
