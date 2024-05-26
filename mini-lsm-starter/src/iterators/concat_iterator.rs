@@ -90,7 +90,7 @@ impl StorageIterator for SstConcatIterator {
             self.next_idx += 1;
         }
 
-        if self.next_idx >= self.sstables.len() {
+        if self.next_idx > self.sstables.len() {
             self.current = None;
         }
 
