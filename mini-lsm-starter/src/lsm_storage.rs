@@ -330,23 +330,29 @@ impl LsmStorageInner {
                         })
                         .collect();
 
-                    let l1_iters = {
-                        let tables: Vec<Arc<SsTable>> = snapshot.levels[0]
-                            .1
-                            .iter()
-                            .filter(|idx| {
-                                let table = snapshot.sstables.get(idx).unwrap().as_ref();
-                                match &table.bloom {
+                    let mut level_iters = vec![];
+                    for (_, sst_ids) in &snapshot.levels {
+                        let iter = {
+                            let tables: Vec<Arc<SsTable>> = sst_ids
+                                .iter()
+                                .map(|sst_id| snapshot.sstables.get(sst_id).unwrap().clone())
+                                .filter(|sst| match &sst.bloom {
                                     Some(b) => b.may_contain(farmhash::fingerprint32(&key)),
                                     None => true,
-                                }
-                            })
-                            .map(|idx| snapshot.sstables.get(idx).unwrap().clone())
-                            .collect();
-                        SstConcatIterator::create_and_seek_to_key(tables, KeySlice::from_slice(key))
-                    };
+                                })
+                                .collect();
+                            SstConcatIterator::create_and_seek_to_key(
+                                tables,
+                                KeySlice::from_slice(key),
+                            )
+                        }?;
+                        level_iters.push(Box::new(iter));
+                    }
 
-                    TwoMergeIterator::create(MergeIterator::create(l0_iters?), l1_iters?)?
+                    TwoMergeIterator::create(
+                        MergeIterator::create(l0_iters?),
+                        MergeIterator::create(level_iters),
+                    )?
                 };
                 if sstable_iter.is_valid() {
                     if sstable_iter.key() == KeySlice::from_slice(key) {
@@ -433,6 +439,7 @@ impl LsmStorageInner {
         {
             let mut guard = self.state.write();
             let mut state_snapshot = guard.as_ref().clone();
+            println!("Freezing memtable id={:?}", state_snapshot.memtable.id());
             state_snapshot
                 .imm_memtables
                 .insert(0, state_snapshot.memtable);
@@ -473,6 +480,8 @@ impl LsmStorageInner {
             // finally remove the flushed memtable
             if state_snapshot.imm_memtables.last().unwrap().id() == last_memtable_id {
                 let _ = state_snapshot.imm_memtables.pop();
+            } else {
+                panic!("The memtable to flush is not the last one");
             }
 
             *guard = Arc::new(state_snapshot);
@@ -511,10 +520,9 @@ impl LsmStorageInner {
         let memtable_iter = MergeIterator::create(iters);
 
         let sstable_iter = {
-            let iters: Result<Vec<Box<SsTableIterator>>> = snapshot
+            let l0_iters: Result<Vec<Box<SsTableIterator>>> = snapshot
                 .l0_sstables
                 .iter()
-                .chain(snapshot.levels[0].1.iter())
                 .filter(|idx| {
                     let table = snapshot.sstables.get(idx).unwrap().clone();
                     // skip sstable if there's no intersection
@@ -553,7 +561,53 @@ impl LsmStorageInner {
                     Ok(Box::new(iter))
                 })
                 .collect();
-            MergeIterator::create(iters?)
+
+            let mut level_iters = vec![];
+            for (_, sst_ids) in &snapshot.levels {
+                let iter = {
+                    let filtered_ssts: Vec<Arc<SsTable>> = sst_ids
+                        .iter()
+                        .map(|sst_id| snapshot.sstables.get(sst_id).unwrap().clone())
+                        .filter(|sst| match upper {
+                            Bound::Included(ub) => {
+                                sst.first_key().as_key_slice() <= KeySlice::from_slice(ub)
+                            }
+                            Bound::Excluded(ub) => {
+                                sst.first_key().as_key_slice() < KeySlice::from_slice(ub)
+                            }
+                            Bound::Unbounded => true,
+                        })
+                        .collect();
+
+                    match lower {
+                        Bound::Unbounded => {
+                            SstConcatIterator::create_and_seek_to_first(filtered_ssts)?
+                        }
+                        Bound::Included(lb) => SstConcatIterator::create_and_seek_to_key(
+                            filtered_ssts,
+                            KeySlice::from_slice(lb),
+                        )?,
+                        Bound::Excluded(lb) => {
+                            let mut iter = SstConcatIterator::create_and_seek_to_key(
+                                filtered_ssts,
+                                KeySlice::from_slice(lb),
+                            )?;
+                            // exclude the excluded bound
+                            if iter.is_valid() && iter.key().raw_ref() == lb {
+                                iter.next()?
+                            }
+                            iter
+                        }
+                    }
+                };
+
+                level_iters.push(Box::new(iter));
+            }
+
+            TwoMergeIterator::create(
+                MergeIterator::create(l0_iters?),
+                MergeIterator::create(level_iters),
+            )?
         };
 
         LsmIterator::new(
