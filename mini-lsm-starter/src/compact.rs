@@ -116,7 +116,22 @@ impl LsmStorageInner {
     fn compact(&self, task: &CompactionTask) -> Result<Vec<Arc<SsTable>>> {
         match task {
             CompactionTask::Leveled(_) => Err(anyhow::anyhow!("not implemented")),
-            CompactionTask::Tiered(_) => Err(anyhow::anyhow!("not implemented")),
+            CompactionTask::Tiered(TieredCompactionTask { tiers, .. }) => {
+                let snapshot = { self.state.read().clone() };
+                let mut iters = vec![];
+                for (_, sst_ids) in tiers {
+                    let iter = SstConcatIterator::create_and_seek_to_first(
+                        sst_ids
+                            .iter()
+                            .map(|sst_id| snapshot.sstables.get(sst_id).unwrap().clone())
+                            .collect(),
+                    )?;
+                    iters.push(Box::new(iter));
+                }
+                let iter = MergeIterator::create(iters);
+
+                self.sst_tables_from_iter(iter)
+            }
             CompactionTask::Simple(SimpleLeveledCompactionTask {
                 upper_level,
                 upper_level_sst_ids,

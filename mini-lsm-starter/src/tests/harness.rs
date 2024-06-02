@@ -236,13 +236,6 @@ pub fn compaction_bench(storage: Arc<MiniLsm>) {
         }
     }
 
-    // {
-    //     let _lock = storage.inner.state_lock.lock();
-    //     println!("16642 {:?}", storage.get("0000016642".as_bytes()).unwrap());
-    //     println!("lock dump!");
-    //     storage.dump_structure();
-    // }
-
     std::thread::sleep(Duration::from_secs(1)); // wait until all memtables flush
     while {
         let snapshot = storage.inner.state.read();
@@ -262,27 +255,6 @@ pub fn compaction_bench(storage: Arc<MiniLsm>) {
     } {
         println!("waiting for compaction to converge");
     }
-
-    // // TODO check everything after flush
-    // {
-    //     let mut all_iter = storage.scan(Bound::Unbounded, Bound::Unbounded).unwrap();
-    //     let mut count = 0usize;
-    //     while all_iter.is_valid() {
-    //         count += 1;
-    //         all_iter.next().unwrap();
-    //     }
-    //     println!("db size {:?}", count);
-    // }
-    //
-    // println!("final dump:");
-    // storage.dump_structure();
-    //
-    // println!("keymap size {:?}", key_map.len());
-    // println!("max key {:?}", max_key);
-    // println!("16641 {:?}", storage.get("0000016641".as_bytes()).unwrap());
-    // println!("16642 {:?}", storage.get("0000016642".as_bytes()).unwrap());
-    // println!("16643 {:?}", storage.get("0000016643".as_bytes()).unwrap());
-    // println!("37643 {:?}", storage.get("0000037643".as_bytes()).unwrap());
 
     let mut expected_key_value_pairs = Vec::new();
     for i in 0..(max_key + 40000) {

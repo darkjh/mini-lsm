@@ -475,7 +475,14 @@ impl LsmStorageInner {
             state_snapshot
                 .sstables
                 .insert(last_memtable_id, Arc::new(sstable));
-            state_snapshot.l0_sstables.insert(0, last_memtable_id);
+
+            // insert the new sstable to the lsm structure, depending on the compaction algorithm used
+            if self.compaction_controller.flush_to_l0() {
+                state_snapshot.l0_sstables.insert(0, last_memtable_id);
+            } else {
+                let new_tier = (last_memtable_id, vec![last_memtable_id]);
+                state_snapshot.levels.insert(0, new_tier);
+            }
 
             // finally remove the flushed memtable
             if state_snapshot.imm_memtables.last().unwrap().id() == last_memtable_id {
