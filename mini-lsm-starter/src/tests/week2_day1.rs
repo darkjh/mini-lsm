@@ -2,7 +2,6 @@ use std::{ops::Bound, path::Path, sync::Arc};
 
 use self::harness::{check_iter_result_by_key, check_lsm_iter_result_by_key, sync};
 use bytes::Bytes;
-use nom::AsBytes;
 use tempfile::tempdir;
 use week2_day1::harness::construct_merge_iterator_over_storage;
 

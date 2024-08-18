@@ -1,10 +1,9 @@
-#![allow(dead_code)] // REMOVE THIS LINE after fully implementing this functionality
-
-use std::fs::File;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use parking_lot::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 
@@ -14,7 +13,7 @@ pub struct Manifest {
     file: Arc<Mutex<File>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Debug)]
 pub enum ManifestRecord {
     Flush(usize),
     NewMemtable(usize),
@@ -22,12 +21,39 @@ pub enum ManifestRecord {
 }
 
 impl Manifest {
-    pub fn create(_path: impl AsRef<Path>) -> Result<Self> {
-        unimplemented!()
+    pub fn create(path: impl AsRef<Path>) -> Result<Self> {
+        Ok(Self {
+            file: Arc::new(Mutex::new(
+                OpenOptions::new()
+                    .read(true)
+                    .create_new(true)
+                    .write(true)
+                    .open(path)
+                    .context("failed to create manifest")?,
+            )),
+        })
     }
 
-    pub fn recover(_path: impl AsRef<Path>) -> Result<(Self, Vec<ManifestRecord>)> {
-        unimplemented!()
+    pub fn recover(path: impl AsRef<Path>) -> Result<(Self, Vec<ManifestRecord>)> {
+        let mut file = OpenOptions::new()
+            .read(true)
+            .append(true)
+            .open(path)
+            .context("failed to recover manifest")?;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+
+        let records: Vec<ManifestRecord> = serde_json::Deserializer::from_slice(&buf)
+            .into_iter::<ManifestRecord>()
+            .map(|r| r.unwrap())
+            .collect();
+
+        Ok((
+            Self {
+                file: Arc::new(Mutex::new(file)),
+            },
+            records,
+        ))
     }
 
     pub fn add_record(
@@ -38,7 +64,10 @@ impl Manifest {
         self.add_record_when_init(record)
     }
 
-    pub fn add_record_when_init(&self, _record: ManifestRecord) -> Result<()> {
-        unimplemented!()
+    pub fn add_record_when_init(&self, record: ManifestRecord) -> Result<()> {
+        let mut file = self.file.lock();
+        file.write_all(serde_json::to_vec(&record)?.as_slice())?;
+        file.sync_all()?;
+        Ok(())
     }
 }

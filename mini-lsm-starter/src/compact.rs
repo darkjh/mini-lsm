@@ -21,9 +21,10 @@ pub use simple_leveled::{
 pub use tiered::{TieredCompactionController, TieredCompactionOptions, TieredCompactionTask};
 
 use crate::lsm_storage::{LsmStorageInner, LsmStorageState};
+use crate::manifest::ManifestRecord;
 use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum CompactionTask {
     Leveled(LeveledCompactionTask),
     Tiered(TieredCompactionTask),
@@ -332,6 +333,7 @@ impl LsmStorageInner {
             )
         };
         let sstables = self.compact(&task)?;
+        let new_sst_ids = sstables.iter().map(|sst| sst.sst_id()).collect::<Vec<_>>();
 
         {
             let _lock = self.state_lock.lock();
@@ -355,6 +357,12 @@ impl LsmStorageInner {
             state_snapshot.levels = vec![(1, new_l1_sstables)];
 
             *guard = Arc::new(state_snapshot);
+
+            self.manifest
+                .as_ref()
+                .unwrap()
+                .add_record(&_lock, ManifestRecord::Compaction(task, new_sst_ids))?;
+            self.sync_dir()?
         }
 
         // remove compacted sstables from disk
@@ -399,6 +407,12 @@ impl LsmStorageInner {
                     to_delete.push(sst_id);
                 }
                 *guard = Arc::new(new_state);
+
+                self.manifest
+                    .as_ref()
+                    .unwrap()
+                    .add_record(&_lock, ManifestRecord::Compaction(task, new_sst_ids))?;
+                self.sync_dir()?
             }
 
             // remove compacted sstables from disk
