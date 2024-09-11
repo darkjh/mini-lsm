@@ -319,8 +319,8 @@ impl LsmStorageInner {
                         next_sst_id = next_sst_id.max(sst_id);
                     }
                     ManifestRecord::Compaction(task, output) => {
-                        let (new_state, _) =
-                            compaction_controller.apply_compaction_result(&state, &task, &output);
+                        let (new_state, _) = compaction_controller
+                            .apply_compaction_result(&state, &task, &output, true);
                         state = new_state;
                         next_sst_id =
                             next_sst_id.max(output.iter().max().copied().unwrap_or_default());
@@ -347,6 +347,19 @@ impl LsmStorageInner {
                 sst_count += 1;
             }
             println!("{} SSTs opened", sst_count);
+
+            if let CompactionController::Leveled(_) = &compaction_controller {
+                for (_id, ssts) in &mut state.levels {
+                    ssts.sort_by(|x, y| {
+                        state
+                            .sstables
+                            .get(x)
+                            .unwrap()
+                            .first_key()
+                            .cmp(state.sstables.get(y).unwrap().first_key())
+                    })
+                }
+            }
 
             next_sst_id += 1;
             state.memtable = Arc::new(MemTable::create(next_sst_id));
