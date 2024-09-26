@@ -4,6 +4,7 @@ use bytes::BufMut;
 use parking_lot::Mutex;
 use tempfile::tempdir;
 
+use crate::compact::CompactionTask;
 use crate::manifest::{Manifest, ManifestRecord};
 use crate::{
     compact::{
@@ -13,7 +14,6 @@ use crate::{
     lsm_storage::{LsmStorageOptions, MiniLsm},
     tests::harness::dump_files_in_dir,
 };
-use crate::compact::CompactionTask;
 
 #[test]
 fn test_manifest_round_trip() {
@@ -125,7 +125,7 @@ fn test_multiple_compacted_ssts_leveled() {
         &dir,
         LsmStorageOptions::default_for_week2_test(compaction_options.clone()),
     )
-        .unwrap();
+    .unwrap();
 
     for i in 0..500 {
         let (key, val) = key_value_pair_with_target_size(i, 20 * 1024);
@@ -139,7 +139,7 @@ fn test_integration(compaction_options: CompactionOptions) {
         &dir,
         LsmStorageOptions::default_for_week2_test(compaction_options.clone()),
     )
-        .unwrap();
+    .unwrap();
     for i in 0..=20 {
         storage.put(b"0", format!("v{}", i).as_bytes()).unwrap();
         if i % 2 == 0 {
@@ -169,7 +169,7 @@ fn test_integration(compaction_options: CompactionOptions) {
         &dir,
         LsmStorageOptions::default_for_week2_test(compaction_options.clone()),
     )
-        .unwrap();
+    .unwrap();
     assert_eq!(&storage.get(b"0").unwrap().unwrap()[..], b"v20".as_slice());
     assert_eq!(&storage.get(b"1").unwrap().unwrap()[..], b"v20".as_slice());
     assert_eq!(storage.get(b"2").unwrap(), None);

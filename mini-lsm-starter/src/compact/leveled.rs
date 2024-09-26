@@ -75,7 +75,7 @@ impl LeveledCompactionController {
             })
             .collect::<Vec<(usize, f64)>>();
 
-        println!("priorities: {:?}", priorities);
+        // println!("priorities: {:?}", priorities);
 
         let target_level = priorities
             .iter()
@@ -174,7 +174,7 @@ impl LeveledCompactionController {
         snapshot: &LsmStorageState,
         task: &LeveledCompactionTask,
         output: &[usize],
-        _in_recovery: bool,
+        in_recovery: bool,
     ) -> (LsmStorageState, Vec<usize>) {
         let mut new_state = snapshot.clone();
         let mut sst_to_delete = vec![];
@@ -206,8 +206,10 @@ impl LeveledCompactionController {
 
         new_lower_level.retain(|x| !task.lower_level_sst_ids.contains(x));
         new_lower_level.extend(output.iter());
-        // TODO find another way to keep the order
-        new_lower_level.sort_by_key(|x| new_state.sstables.get(x).unwrap().first_key());
+
+        if !in_recovery {
+            new_lower_level.sort_by_key(|x| new_state.sstables.get(x).unwrap().first_key());
+        }
 
         sst_to_delete.extend(task.lower_level_sst_ids.iter());
         (new_state, sst_to_delete)
