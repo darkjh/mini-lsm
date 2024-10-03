@@ -88,7 +88,7 @@ impl TieredCompactionController {
             });
         }
 
-        return None;
+        None
     }
 
     pub fn apply_compaction_result(
@@ -115,14 +115,14 @@ impl TieredCompactionController {
         for (level, ssts) in &snapshot.levels {
             if !compacted_levels.contains(level) && !inserted {
                 // newly flushed sst, in its own tier
-                new_tiers.push((level.clone(), ssts.clone()));
+                new_tiers.push((*level, ssts.clone()));
             } else if !compacted_levels.contains(level) && inserted {
                 // carry over this tier
-                new_tiers.push((level.clone(), ssts.clone()));
+                new_tiers.push((*level, ssts.clone()));
             } else {
                 // replace compacted tiers
                 if !inserted {
-                    new_tiers.push((output.first().unwrap().clone(), output.to_vec()));
+                    new_tiers.push((*output.first().unwrap(), output.to_vec()));
                     inserted = true
                 }
 

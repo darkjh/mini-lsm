@@ -114,7 +114,7 @@ impl LeveledCompactionController {
             .unwrap()
             .1
             .iter()
-            .map(|x| snapshot.sstables.get(x).clone().unwrap().file.size())
+            .map(|x| snapshot.sstables.get(x).unwrap().file.size())
             .sum();
         let base_level_size = self.options.base_level_size_mb as u64 * 1024 * 1024;
 
@@ -141,7 +141,7 @@ impl LeveledCompactionController {
             }
             targets[i - 1] = target;
         }
-        return targets;
+        targets
     }
 
     fn find_overlapping_ssts(
@@ -180,7 +180,7 @@ impl LeveledCompactionController {
         let mut sst_to_delete = vec![];
 
         // update L0 tables
-        if let None = task.upper_level {
+        if task.upper_level.is_none() {
             let mut new_l0_sstables = vec![];
             for sst_id in snapshot.l0_sstables.iter() {
                 if !task.upper_level_sst_ids.contains(sst_id) {

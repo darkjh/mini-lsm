@@ -50,7 +50,7 @@ impl SimpleLeveledCompactionController {
 
         // check size trigger, from level 1 to max level
         let mut upper_level = 1usize;
-        while upper_level <= self.options.max_levels - 1 {
+        while upper_level < self.options.max_levels {
             let upper_size = snapshot.levels[upper_level - 1].1.len();
             let lower_size = snapshot.levels[upper_level].1.len();
 
@@ -71,7 +71,7 @@ impl SimpleLeveledCompactionController {
 
     fn should_trigger_compaction(&self, upper_size: usize, lower_size: usize) -> bool {
         if upper_size == 0 {
-            return false;
+            false
         } else {
             (lower_size as f64 / upper_size as f64) * 100f64
                 < self.options.size_ratio_percent as f64
@@ -96,7 +96,7 @@ impl SimpleLeveledCompactionController {
         let mut sst_to_delete = vec![];
 
         // update L0 tables
-        if let None = task.upper_level {
+        if task.upper_level.is_none() {
             let mut new_l0_sstables = vec![];
             for sst_id in snapshot.l0_sstables.iter() {
                 if !task.upper_level_sst_ids.contains(sst_id) {

@@ -78,10 +78,8 @@ impl<
             } else {
                 self.a.next()?;
             }
-        } else {
-            if self.b.is_valid() {
-                self.b.next()?;
-            }
+        } else if self.b.is_valid() {
+            self.b.next()?;
         }
 
         self.should_read_a = Self::should_read_a(&self.a, &self.b);

@@ -126,7 +126,7 @@ impl LsmStorageInner {
                 // TODO dedup
                 let snapshot = { self.state.read().clone() };
 
-                if let Some(_) = upper_level {
+                if upper_level.is_some() {
                     // non-L0 compaction
                     let upper_iters = {
                         let mut ssts = upper_level_sst_ids
@@ -203,7 +203,7 @@ impl LsmStorageInner {
                 ..
             }) => {
                 let snapshot = { self.state.read().clone() };
-                if let Some(_) = upper_level {
+                if upper_level.is_some() {
                     // non-L0 compaction
                     let upper_iters = SstConcatIterator::create_and_seek_to_first(
                         upper_level_sst_ids

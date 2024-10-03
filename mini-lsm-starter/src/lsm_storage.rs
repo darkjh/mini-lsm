@@ -2,7 +2,6 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs::File;
-use std::io::stdout;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicUsize;
@@ -187,10 +186,11 @@ impl MiniLsm {
         }
 
         // freeze current memtable, if not empty
-        if {
+        let res = {
             let snapshot = self.inner.state.read();
             !snapshot.memtable.is_empty()
-        } {
+        };
+        if res {
             self.inner
                 .force_freeze_memtable(&self.inner.state_lock.lock())?;
         }
@@ -375,7 +375,7 @@ impl LsmStorageInner {
 
             if !memtables.is_empty() && options.enable_wal {
                 // recovered memtables (not flushed yet), ordered from latest to earliest
-                let mut ids: Vec<usize> = memtables.into_iter().rev().collect();
+                let ids: Vec<usize> = memtables.into_iter().rev().collect();
 
                 // first one is the current memtable
                 let current_id = ids.first().unwrap();
@@ -391,7 +391,7 @@ impl LsmStorageInner {
                         MemTable::recover_from_wal(*id, wal_path)
                     })
                     .collect();
-                state.imm_memtables = imm_memtables?.into_iter().map(|x| Arc::new(x)).collect();
+                state.imm_memtables = imm_memtables?.into_iter().map(Arc::new).collect();
             } else {
                 next_sst_id += 1;
                 state.memtable = Arc::new(MemTable::create(next_sst_id));
@@ -465,7 +465,7 @@ impl LsmStorageInner {
                         .filter(|idx| {
                             let table = snapshot.sstables.get(idx).unwrap().as_ref();
                             match &table.bloom {
-                                Some(b) => b.may_contain(farmhash::fingerprint32(&key)),
+                                Some(b) => b.may_contain(farmhash::fingerprint32(key)),
                                 None => true,
                             }
                         })
@@ -485,7 +485,7 @@ impl LsmStorageInner {
                                 .iter()
                                 .map(|sst_id| snapshot.sstables.get(sst_id).unwrap().clone())
                                 .filter(|sst| match &sst.bloom {
-                                    Some(b) => b.may_contain(farmhash::fingerprint32(&key)),
+                                    Some(b) => b.may_contain(farmhash::fingerprint32(key)),
                                     None => true,
                                 })
                                 .collect();
@@ -502,15 +502,13 @@ impl LsmStorageInner {
                         MergeIterator::create(level_iters),
                     )?
                 };
-                if sstable_iter.is_valid() {
-                    if sstable_iter.key() == KeySlice::from_slice(key) {
-                        return if sstable_iter.value().is_empty() {
-                            // deleted
-                            Ok(None)
-                        } else {
-                            Ok(Some(Bytes::copy_from_slice(sstable_iter.value())))
-                        };
-                    }
+                if sstable_iter.is_valid() && sstable_iter.key() == KeySlice::from_slice(key) {
+                    return if sstable_iter.value().is_empty() {
+                        // deleted
+                        Ok(None)
+                    } else {
+                        Ok(Some(Bytes::copy_from_slice(sstable_iter.value())))
+                    };
                 }
                 Ok(None)
             }
@@ -605,7 +603,7 @@ impl LsmStorageInner {
         }
 
         if let Some(ref manifest) = self.manifest {
-            manifest.add_record(&_state_lock_observer, ManifestRecord::NewMemtable(id))?
+            manifest.add_record(_state_lock_observer, ManifestRecord::NewMemtable(id))?
         }
         self.sync_dir()?;
 

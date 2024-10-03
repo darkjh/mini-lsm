@@ -102,16 +102,14 @@ impl StorageIterator for SsTableIterator {
     fn next(&mut self) -> Result<()> {
         self.blk_iter.next();
 
-        if !self.blk_iter.is_valid() {
-            if self.blk_idx + 1 < self.table.num_of_blocks() {
-                // switch to next block
-                self.blk_idx += 1;
-                let next_blk_iter = BlockIterator::create_and_seek_to_first(
-                    self.table.read_block_cached(self.blk_idx)?,
-                );
-                let invalid_iter = std::mem::replace(&mut self.blk_iter, next_blk_iter);
-                drop(invalid_iter);
-            }
+        if !self.blk_iter.is_valid() && self.blk_idx + 1 < self.table.num_of_blocks() {
+            // switch to next block
+            self.blk_idx += 1;
+            let next_blk_iter = BlockIterator::create_and_seek_to_first(
+                self.table.read_block_cached(self.blk_idx)?,
+            );
+            let invalid_iter = std::mem::replace(&mut self.blk_iter, next_blk_iter);
+            drop(invalid_iter);
         }
         Ok(())
     }
