@@ -181,6 +181,7 @@ impl MiniLsm {
         }
 
         if self.inner.options.enable_wal {
+            self.inner.sync()?;
             self.inner.sync_dir()?;
             return Ok(());
         }
@@ -308,7 +309,7 @@ impl LsmStorageInner {
         let mut next_sst_id = 1usize;
         let manifest_path = path.join("MANIFEST");
         let manifest = if manifest_path.exists() {
-            // TODO extract
+            // manifest found, existing storage
             let (manifest, records) = Manifest::recover(&manifest_path)?;
             let mut memtables = BTreeSet::new();
             for record in records {
@@ -400,6 +401,7 @@ impl LsmStorageInner {
             manifest.add_record_when_init(ManifestRecord::NewMemtable(state.memtable.id()))?;
             manifest
         } else {
+            // no manifest file found, new storage
             if options.enable_wal {
                 let wal_path = Self::path_of_wal_static(path, next_sst_id);
                 state.memtable = Arc::new(MemTable::create_with_wal(next_sst_id, wal_path)?);
@@ -430,7 +432,7 @@ impl LsmStorageInner {
     }
 
     pub fn sync(&self) -> Result<()> {
-        unimplemented!()
+        self.state.read().memtable.sync_wal()
     }
 
     pub fn add_compaction_filter(&self, compaction_filter: CompactionFilter) {
@@ -584,7 +586,7 @@ impl LsmStorageInner {
         // TODO should probably create the new memtable outside of the state lock
         let id = self.next_sst_id();
         let new_memtable = if self.options.enable_wal {
-            println!("Creating new memtable with WAL id={:?}", id);
+            println!("Creating new memtableg with WAL id={:?}", id);
             Arc::new(MemTable::create_with_wal(id, self.path_of_wal(id))?)
         } else {
             Arc::new(MemTable::create(id))
