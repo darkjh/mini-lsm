@@ -31,11 +31,7 @@ impl BlockMeta {
     /// Encode block meta to a buffer.
     /// You may add extra fields to the buffer,
     /// in order to help keep track of `first_key` when decoding from the same buffer in the future.
-    pub fn encode_block_meta(
-        block_meta: &[BlockMeta],
-        #[allow(clippy::ptr_arg)] // remove this allow after you finish
-        buf: &mut Vec<u8>,
-    ) {
+    pub fn encode_block_meta(block_meta: &[BlockMeta], buf: &mut Vec<u8>) {
         buf.put_u32(block_meta.len() as u32);
         // offset (4B) | fkey_len (2B) | fkey | lkey_len (2B) | lkey
         for meta in block_meta {
@@ -197,9 +193,17 @@ impl SsTable {
             .get(block_idx + 1)
             .map(|x| x.offset)
             .unwrap_or_else(|| self.block_meta_offset) as u64;
-        Ok(Arc::new(Block::decode(
-            &self.file.read(block_start, block_end - block_start)?,
-        )))
+
+        // end offset for block data, excluding checksum
+        let data_end = block_end - 4;
+
+        // TODO could do one single read for both data and checksum to improve performance
+        let data = &self.file.read(block_start, data_end - block_start)?;
+        if crc32fast::hash(data) != Bytes::from(self.file.read(data_end, 4)?).get_u32() {
+            bail!("Checksum mismatch for sst {}, block {}", self.id, block_idx);
+        }
+
+        Ok(Arc::new(Block::decode(data)))
     }
 
     /// Read a block from disk, with block cache. (Day 4)

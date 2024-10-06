@@ -1,3 +1,4 @@
+use std::ops::Add;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -68,7 +69,12 @@ impl SsTableBuilder {
             last_key: KeyBytes::from_bytes(Bytes::copy_from_slice(&self.last_key)),
         };
         self.meta.push(meta);
-        self.data.put(prev_builder.build().encode());
+        let block_bytes = prev_builder.build().encode();
+        self.data.put(block_bytes.as_ref());
+
+        // block checksum
+        let checksum = crc32fast::hash(&block_bytes);
+        self.data.put_u32(checksum)
     }
 
     /// Get the estimated size of the SSTable.
