@@ -148,11 +148,11 @@ impl SsTable {
 
         let block_meta_offset =
             Bytes::from(file.read(bloom_filter_offset - 4, 4)?).get_u32() as u64;
-        let mut block_meta_bytes = Bytes::from(file.read(
+        let block_meta_bytes = Bytes::from(file.read(
             block_meta_offset,
             bloom_filter_offset - block_meta_offset - 4,
         )?);
-        let block_meta = BlockMeta::decode_block_meta(&mut block_meta_bytes)?;
+        let block_meta = BlockMeta::decode_block_meta(&block_meta_bytes)?;
 
         let first_key = KeyBytes::from_bytes(Bytes::copy_from_slice(
             block_meta.first().unwrap().first_key.raw_ref(),
