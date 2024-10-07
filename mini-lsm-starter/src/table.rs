@@ -31,12 +31,10 @@ impl BlockMeta {
     /// Encode block meta to a buffer.
     /// You may add extra fields to the buffer,
     /// in order to help keep track of `first_key` when decoding from the same buffer in the future.
-    pub fn encode_block_meta(
-        block_meta: &[BlockMeta],
-        #[allow(clippy::ptr_arg)] // remove this allow after you finish
-        buf: &mut Vec<u8>,
-    ) {
+    pub fn encode_block_meta(block_meta: &[BlockMeta], buf: &mut Vec<u8>) {
+        // number of blocks
         buf.put_u32(block_meta.len() as u32);
+        let meta_start = buf.len();
         // offset (4B) | fkey_len (2B) | fkey | lkey_len (2B) | lkey
         for meta in block_meta {
             buf.put_u32(meta.offset as u32);
@@ -45,10 +43,22 @@ impl BlockMeta {
             buf.put_u16(meta.last_key.len() as u16);
             buf.put(meta.last_key.raw_ref());
         }
+        let meta_end = buf.len();
+        let checksum = crc32fast::hash(&buf[meta_start..meta_end]);
+
+        // #blocks (4B) | metas (varlen) | checksum (4B)
+        buf.put_u32(checksum);
     }
 
     /// Decode block meta from a buffer.
-    pub fn decode_block_meta(buf: &mut impl Buf) -> Vec<BlockMeta> {
+    pub fn decode_block_meta(mut buf: &[u8]) -> Result<Vec<BlockMeta>> {
+        let end_offset = buf.len();
+        let checksum = (&buf[end_offset - 4..]).get_u32();
+        // first 4B is the number of blocks, metadata is after that
+        if checksum != crc32fast::hash(&buf[4..end_offset - 4]) {
+            bail!("Block metadata checksum mismatch");
+        }
+
         let size = buf.get_u32() as usize;
         let mut metas = Vec::with_capacity(size);
         for _ in 0..size {
@@ -65,7 +75,7 @@ impl BlockMeta {
             };
             metas.push(meta);
         }
-        metas
+        Ok(metas)
     }
 }
 
@@ -138,11 +148,11 @@ impl SsTable {
 
         let block_meta_offset =
             Bytes::from(file.read(bloom_filter_offset - 4, 4)?).get_u32() as u64;
-        let mut block_meta_bytes = Bytes::from(file.read(
+        let block_meta_bytes = Bytes::from(file.read(
             block_meta_offset,
             bloom_filter_offset - block_meta_offset - 4,
         )?);
-        let block_meta = BlockMeta::decode_block_meta(&mut block_meta_bytes);
+        let block_meta = BlockMeta::decode_block_meta(&block_meta_bytes)?;
 
         let first_key = KeyBytes::from_bytes(Bytes::copy_from_slice(
             block_meta.first().unwrap().first_key.raw_ref(),
@@ -197,9 +207,21 @@ impl SsTable {
             .get(block_idx + 1)
             .map(|x| x.offset)
             .unwrap_or_else(|| self.block_meta_offset) as u64;
-        Ok(Arc::new(Block::decode(
-            &self.file.read(block_start, block_end - block_start)?,
-        )))
+
+        // end offset for block data, excluding checksum
+        let data_end = block_end - 4;
+
+        // TODO could do one single read for both data and checksum to improve performance
+        let data = &self.file.read(block_start, data_end - block_start)?;
+        if crc32fast::hash(data) != Bytes::from(self.file.read(data_end, 4)?).get_u32() {
+            bail!(
+                "Block checksum mismatch for sst {}, block {}",
+                self.id,
+                block_idx
+            );
+        }
+
+        Ok(Arc::new(Block::decode(data)))
     }
 
     /// Read a block from disk, with block cache. (Day 4)
