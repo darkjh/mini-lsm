@@ -1,9 +1,8 @@
 use bytes::Buf;
 use std::sync::Arc;
 
-use crate::key::{KeySlice, KeyVec};
-
 use super::Block;
+use crate::key::{KeySlice, KeyVec};
 
 /// Iterates on a block.
 pub struct BlockIterator {
@@ -19,19 +18,34 @@ pub struct BlockIterator {
     first_key: KeyVec,
 }
 
+impl Block {
+    fn get_first_key(&self) -> KeyVec {
+        if self.data.is_empty() {
+            return KeyVec::new();
+        }
+
+        let mut buf = self.data.as_slice();
+        let key_len = buf.get_u16() as usize;
+        buf.get_u16();
+        let key = &buf[..key_len];
+
+        KeyVec::from_vec(key.to_vec())
+    }
+}
+
 impl BlockIterator {
     fn new(block: Arc<Block>) -> Self {
         Self {
-            block,
+            block: block.clone(),
             key: KeyVec::new(),
             value_range: (0, 0),
             idx: 0,
-            first_key: KeyVec::new(),
+            first_key: block.get_first_key(),
         }
     }
 
     pub(crate) fn empty() -> BlockIterator {
-        BlockIterator::create_and_seek_to_first(Arc::new(Block {
+        BlockIterator::new(Arc::new(Block {
             data: Vec::new(),
             offsets: Vec::new(),
         }))
@@ -90,13 +104,25 @@ impl BlockIterator {
     fn seek_to_offset(&mut self, offset: u16) {
         let mut entry = &self.block.data[offset as usize..];
 
-        let key_len = entry.get_u16() as usize;
-        self.key = KeyVec::from_vec(entry[..key_len].to_vec());
+        let overlap = entry.get_u16() as usize;
+        let rest_key_len = entry.get_u16() as usize;
 
-        entry.advance(key_len);
+        self.key.clear();
+        self.key.append(&self.first_key.raw_ref()[..overlap]);
+        self.key.append(&entry[..rest_key_len]);
+
+        if offset == 0 {
+            entry.advance(overlap);
+        } else {
+            entry.advance(rest_key_len);
+        }
 
         let value_len = entry.get_u16() as usize;
-        self.value_range.0 = offset as usize + 4 + key_len;
+        self.value_range.0 = if offset == 0 {
+            offset as usize + 4 + overlap + 2
+        } else {
+            offset as usize + 4 + rest_key_len + 2
+        };
         self.value_range.1 = self.value_range.0 + value_len;
     }
 
@@ -106,9 +132,14 @@ impl BlockIterator {
     pub fn seek_to_key(&mut self, key: KeySlice) {
         let pos = self.block.offsets.binary_search_by(|v| {
             let mut entry = &self.block.data[*v as usize..];
-            let key_len = entry.get_u16();
-            let entry_key = &entry[..key_len as usize];
-            entry_key.cmp(key.into_inner())
+            let overlap = entry.get_u16() as usize;
+            let rest_key_len = entry.get_u16() as usize;
+
+            self.key.clear();
+            self.key.append(&self.first_key.raw_ref()[..overlap]);
+            self.key.append(&entry[..rest_key_len]);
+
+            self.key.raw_ref().cmp(key.into_inner())
         });
 
         match pos {

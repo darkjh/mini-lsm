@@ -37,16 +37,43 @@ impl BlockBuilder {
             return false;
         }
 
+        // handle offsets
+        self.offsets.push(self.data.len() as u16);
+
         if self.first_key.is_empty() {
             self.first_key.set_from_slice(key);
+
+            self.data.put_u16(key.len() as u16);
+            self.data.put_u16(0u16);
+            self.data.put(key.raw_ref());
+        } else {
+            // key prefix encoding
+            // first value would have full overlap and 0 rest_key_len
+            let overlap = self.compute_key_overlap(key);
+            let rest_key_len = key.len() - overlap;
+
+            self.data.put_u16(overlap as u16);
+            self.data.put_u16(rest_key_len as u16);
+            self.data.put(&key.raw_ref()[overlap..]);
         }
 
-        self.offsets.push(self.data.len() as u16);
-        self.data.put_u16(key.len() as u16);
-        self.data.put(key.into_inner());
         self.data.put_u16(value.len() as u16);
         self.data.put(value);
+        self.data.put_u16(value.len() as u16);
+        self.data.put(value);
+
         true
+    }
+
+    fn compute_key_overlap(&self, key: KeySlice) -> usize {
+        let mut i = 0;
+        while i < self.first_key.len() && i < key.len() {
+            if self.first_key.raw_ref()[i] != key.raw_ref()[i] {
+                break;
+            }
+            i += 1;
+        }
+        i
     }
 
     /// Check if there is no key-value pair in the block.
