@@ -28,8 +28,10 @@ impl Block {
         let key_len = buf.get_u16() as usize;
         buf.get_u16();
         let key = &buf[..key_len];
+        buf.advance(key_len);
+        let ts = buf.get_u64();
 
-        KeyVec::from_vec(key.to_vec())
+        KeyVec::from_vec_with_ts(key.to_vec(), ts)
     }
 }
 
@@ -108,7 +110,7 @@ impl BlockIterator {
         let rest_key_len = entry.get_u16() as usize;
 
         self.key.clear();
-        self.key.append(&self.first_key.raw_ref()[..overlap]);
+        self.key.append(&self.first_key.key_ref()[..overlap]);
         self.key.append(&entry[..rest_key_len]);
 
         if offset == 0 {
@@ -116,12 +118,13 @@ impl BlockIterator {
         } else {
             entry.advance(rest_key_len);
         }
+        self.key.set_ts(entry.get_u64());
 
         let value_len = entry.get_u16() as usize;
         self.value_range.0 = if offset == 0 {
-            offset as usize + 4 + overlap + 2
+            offset as usize + 4 + overlap + 2 + 8
         } else {
-            offset as usize + 4 + rest_key_len + 2
+            offset as usize + 4 + rest_key_len + 2 + 8
         };
         self.value_range.1 = self.value_range.0 + value_len;
     }
@@ -131,15 +134,25 @@ impl BlockIterator {
     /// callers.
     pub fn seek_to_key(&mut self, key: KeySlice) {
         let pos = self.block.offsets.binary_search_by(|v| {
-            let mut entry = &self.block.data[*v as usize..];
+            let offset = *v as usize;
+
+            let mut entry = &self.block.data[offset..];
             let overlap = entry.get_u16() as usize;
             let rest_key_len = entry.get_u16() as usize;
 
             self.key.clear();
-            self.key.append(&self.first_key.raw_ref()[..overlap]);
+            self.key.append(&self.first_key.key_ref()[..overlap]);
             self.key.append(&entry[..rest_key_len]);
 
-            self.key.raw_ref().cmp(key.into_inner())
+            // TODO dedup or find better way to do it
+            if offset == 0 {
+                entry.advance(overlap);
+            } else {
+                entry.advance(rest_key_len);
+            }
+            self.key.set_ts(entry.get_u64());
+
+            self.key.as_key_slice().cmp(&key)
         });
 
         match pos {

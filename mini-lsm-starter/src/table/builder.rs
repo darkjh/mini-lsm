@@ -6,15 +6,15 @@ use bytes::BufMut;
 use bytes::Bytes;
 
 use super::{BlockMeta, FileObject, SsTable};
-use crate::key::KeyBytes;
+use crate::key::{KeyBytes, KeyVec};
 use crate::table::bloom::Bloom;
 use crate::{block::BlockBuilder, key::KeySlice, lsm_storage::BlockCache};
 
 /// Builds an SSTable from key-value pairs.
 pub struct SsTableBuilder {
     builder: BlockBuilder,
-    first_key: Vec<u8>,
-    last_key: Vec<u8>,
+    first_key: KeyVec,
+    last_key: KeyVec,
     data: Vec<u8>,
     pub(crate) meta: Vec<BlockMeta>,
     block_size: usize,
@@ -27,8 +27,8 @@ impl SsTableBuilder {
     pub fn new(block_size: usize) -> Self {
         SsTableBuilder {
             builder: BlockBuilder::new(block_size),
-            first_key: Vec::new(),
-            last_key: Vec::new(),
+            first_key: KeyVec::new(),
+            last_key: KeyVec::new(),
             data: Vec::new(),
             meta: Vec::new(),
             block_size,
@@ -42,7 +42,7 @@ impl SsTableBuilder {
     /// be helpful here)
     pub fn add(&mut self, key: KeySlice, value: &[u8]) {
         if self.first_key.is_empty() {
-            self.first_key.extend(key.into_inner());
+            self.first_key.set_from_slice(key);
         }
 
         if !self.builder.add(key, value) {
@@ -51,11 +51,9 @@ impl SsTableBuilder {
             // it's guaranteed to success for the first entry
             let _ = self.builder.add(key, value);
         }
-        self.key_hashes
-            .push(farmhash::fingerprint32(key.into_inner()));
+        self.key_hashes.push(farmhash::fingerprint32(key.key_ref()));
 
-        self.last_key.clear();
-        self.last_key.extend(key.into_inner())
+        self.last_key.set_from_slice(key);
     }
 
     fn finish_current_block(&mut self) {
@@ -64,8 +62,14 @@ impl SsTableBuilder {
 
         let meta = BlockMeta {
             offset: self.data.len(),
-            first_key: KeyBytes::from_bytes(Bytes::copy_from_slice(&self.first_key)),
-            last_key: KeyBytes::from_bytes(Bytes::copy_from_slice(&self.last_key)),
+            first_key: KeyBytes::from_bytes_with_ts(
+                Bytes::copy_from_slice(self.first_key.key_ref()),
+                self.first_key.ts(),
+            ),
+            last_key: KeyBytes::from_bytes_with_ts(
+                Bytes::copy_from_slice(self.last_key.key_ref()),
+                self.last_key.ts(),
+            ),
         };
         self.meta.push(meta);
         let block_bytes = prev_builder.build().encode();
@@ -106,12 +110,8 @@ impl SsTableBuilder {
 
         let file = FileObject::create(path.as_ref(), self.data)?;
 
-        let first_key = KeyBytes::from_bytes(Bytes::copy_from_slice(
-            self.meta.first().unwrap().first_key.raw_ref(),
-        ));
-        let last_key = KeyBytes::from_bytes(Bytes::copy_from_slice(
-            self.meta.last().unwrap().last_key.raw_ref(),
-        ));
+        let first_key = self.meta.first().unwrap().first_key.clone();
+        let last_key = self.meta.last().unwrap().last_key.clone();
 
         let sst = SsTable {
             file,

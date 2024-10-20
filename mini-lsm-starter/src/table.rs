@@ -38,10 +38,14 @@ impl BlockMeta {
         // offset (4B) | fkey_len (2B) | fkey | lkey_len (2B) | lkey
         for meta in block_meta {
             buf.put_u32(meta.offset as u32);
-            buf.put_u16(meta.first_key.len() as u16);
-            buf.put(meta.first_key.raw_ref());
-            buf.put_u16(meta.last_key.len() as u16);
-            buf.put(meta.last_key.raw_ref());
+
+            buf.put_u16(meta.first_key.key_len() as u16);
+            buf.put(meta.first_key.key_ref());
+            buf.put_u64(meta.first_key.ts());
+
+            buf.put_u16(meta.last_key.key_len() as u16);
+            buf.put(meta.last_key.key_ref());
+            buf.put_u64(meta.last_key.ts());
         }
         let meta_end = buf.len();
         let checksum = crc32fast::hash(&buf[meta_start..meta_end]);
@@ -64,9 +68,14 @@ impl BlockMeta {
         for _ in 0..size {
             let offset = buf.get_u32() as usize;
             let fkey_len = buf.get_u16() as usize;
-            let first_key = KeyBytes::from_bytes(buf.copy_to_bytes(fkey_len));
+            let first_key_bytes = buf.copy_to_bytes(fkey_len);
+            let first_key_ts = buf.get_u64();
+            let first_key = KeyBytes::from_bytes_with_ts(first_key_bytes, first_key_ts);
+
             let lkey_len = buf.get_u16() as usize;
-            let last_key = KeyBytes::from_bytes(buf.copy_to_bytes(lkey_len));
+            let last_key_bytes = buf.copy_to_bytes(lkey_len);
+            let last_key_ts = buf.get_u64();
+            let last_key = KeyBytes::from_bytes_with_ts(last_key_bytes, last_key_ts);
 
             let meta = BlockMeta {
                 offset,
@@ -154,12 +163,8 @@ impl SsTable {
         )?);
         let block_meta = BlockMeta::decode_block_meta(&block_meta_bytes)?;
 
-        let first_key = KeyBytes::from_bytes(Bytes::copy_from_slice(
-            block_meta.first().unwrap().first_key.raw_ref(),
-        ));
-        let last_key = KeyBytes::from_bytes(Bytes::copy_from_slice(
-            block_meta.last().unwrap().last_key.raw_ref(),
-        ));
+        let first_key = block_meta.first().unwrap().first_key.clone();
+        let last_key = block_meta.last().unwrap().last_key.clone();
 
         let table = SsTable {
             file,
