@@ -8,6 +8,8 @@ Any sorted order data structure can be used, for example a tree map
 ### Why do we need a combination of state and state_lock? Can we only use state.read() and state.write()?
 `state_lock` protects the lsm structure while mutating the lsm state. There could be other background activities that
 race with the memtable operations (sst, compaction etc.)
+`state_lock` is essential in the case where the lsm state is replaced by a new one. In this case the RWLock is self is
+not enough as the out most `Arc` would point to a new lsm state, by passing the RWLock.
 
 ### Why does the order to store and to probe the memtables matter? If a key appears in multiple memtables, which version should you return to the user?
 Memtables are store in a time order. For the current memtable the key is overwritten each time. For the immutable ones,

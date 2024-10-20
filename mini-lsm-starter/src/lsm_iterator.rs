@@ -49,11 +49,11 @@ impl StorageIterator for LsmIterator {
     type KeyType<'a> = &'a [u8];
 
     fn is_valid(&self) -> bool {
-        self.inner.is_valid() && !self.is_out_of_bound(self.inner.key().raw_ref())
+        self.inner.is_valid() && !self.is_out_of_bound(self.inner.key().key_ref())
     }
 
     fn key(&self) -> &[u8] {
-        self.inner.key().into_inner()
+        self.inner.key().key_ref()
     }
 
     fn value(&self) -> &[u8] {
