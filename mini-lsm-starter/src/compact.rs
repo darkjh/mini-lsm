@@ -1,5 +1,3 @@
-#![allow(dead_code)] // REMOVE THIS LINE after fully implementing this functionality
-
 mod leveled;
 mod simple_leveled;
 mod tiered;
@@ -291,13 +289,21 @@ impl LsmStorageInner {
         let mut result = vec![];
         let mut added_count = 0usize;
 
+        let mut current_key = Vec::new();
+        let mut is_same_key = false;
+
         while iter.is_valid() {
-            if !iter.value().is_empty() {
-                builder.add(iter.key(), iter.value());
-                added_count += 1;
+            if iter.key().key_ref() != current_key {
+                is_same_key = false;
+                current_key = iter.key().key_ref().to_vec();
+            } else {
+                is_same_key = true;
             }
 
-            if builder.estimated_size() >= self.options.target_sst_size {
+            builder.add(iter.key(), iter.value());
+            added_count += 1;
+
+            if !is_same_key && builder.estimated_size() >= self.options.target_sst_size {
                 let sst = self.build_sst_table(builder)?;
                 result.push(sst);
                 builder = SsTableBuilder::new(self.options.block_size);

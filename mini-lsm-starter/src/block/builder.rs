@@ -61,8 +61,6 @@ impl BlockBuilder {
 
         self.data.put_u16(value.len() as u16);
         self.data.put(value);
-        self.data.put_u16(value.len() as u16);
-        self.data.put(value);
 
         true
     }

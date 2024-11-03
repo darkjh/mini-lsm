@@ -1,5 +1,3 @@
-use parking_lot::RwLock;
-use std::sync::Arc;
 use tempfile::tempdir;
 
 use crate::{

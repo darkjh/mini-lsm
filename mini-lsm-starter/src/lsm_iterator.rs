@@ -19,19 +19,17 @@ type LsmIteratorInner = TwoMergeIterator<
 pub struct LsmIterator {
     inner: LsmIteratorInner,
     upper: Bound<Bytes>,
+    prev_key: Vec<u8>,
 }
 
 impl LsmIterator {
     pub(crate) fn new(iter: LsmIteratorInner, upper: Bound<Bytes>) -> Result<Self> {
-        let mut lsm_iter = Self { inner: iter, upper };
-
-        // In case that first values are empty
-        while lsm_iter.is_valid() && lsm_iter.value().is_empty() {
-            match lsm_iter.next() {
-                Ok(_) => {}
-                Err(e) => return Err(e),
-            }
-        }
+        let mut lsm_iter = Self {
+            inner: iter,
+            upper,
+            prev_key: Vec::new(),
+        };
+        lsm_iter.move_to_next_key()?;
 
         Ok(lsm_iter)
     }
@@ -42,6 +40,27 @@ impl LsmIterator {
             Bound::Included(up) => key > up,
             Bound::Excluded(up) => key >= up,
         }
+    }
+
+    // if a key with the same value is found, move to the next key
+    // also skip delete tombstones as it's the final result of scan
+    fn move_to_next_key(&mut self) -> Result<()> {
+        loop {
+            while self.inner.is_valid() && self.prev_key == self.inner.key().key_ref() {
+                self.inner.next()?;
+            }
+            if !self.inner.is_valid() {
+                break;
+            }
+            self.prev_key.clear();
+            self.prev_key.extend(self.inner.key().key_ref());
+
+            if !self.inner.value().is_empty() {
+                break;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -61,16 +80,9 @@ impl StorageIterator for LsmIterator {
     }
 
     fn next(&mut self) -> Result<()> {
-        loop {
-            match self.inner.next() {
-                Ok(_) => {
-                    if !self.inner.is_valid() || !self.inner.value().is_empty() {
-                        return Ok(());
-                    }
-                }
-                e @ Err(_) => return e,
-            }
-        }
+        self.inner.next()?;
+        self.move_to_next_key()?;
+        Ok(())
     }
 
     fn num_active_iterators(&self) -> usize {
