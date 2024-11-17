@@ -1,6 +1,3 @@
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use std::{
     collections::HashSet,
     ops::Bound,
@@ -14,7 +11,7 @@ use ouroboros::self_referencing;
 use parking_lot::Mutex;
 
 use crate::{
-    iterators::{two_merge_iterator::TwoMergeIterator, StorageIterator},
+    iterators::StorageIterator,
     lsm_iterator::{FusedIterator, LsmIterator},
     lsm_storage::LsmStorageInner,
 };
@@ -30,18 +27,19 @@ pub struct Transaction {
 
 impl Transaction {
     pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        unimplemented!()
+        self.inner.get_with_ts(key, self.read_ts)
     }
 
     pub fn scan(self: &Arc<Self>, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> Result<TxnIterator> {
+        let iter = self.inner.scan_with_ts(lower, upper, self.read_ts)?;
+        TxnIterator::create(self.clone(), iter)
+    }
+
+    pub fn put(&self, _key: &[u8], _value: &[u8]) {
         unimplemented!()
     }
 
-    pub fn put(&self, key: &[u8], value: &[u8]) {
-        unimplemented!()
-    }
-
-    pub fn delete(&self, key: &[u8]) {
+    pub fn delete(&self, _key: &[u8]) {
         unimplemented!()
     }
 
@@ -91,15 +89,13 @@ impl StorageIterator for TxnLocalIterator {
 
 pub struct TxnIterator {
     _txn: Arc<Transaction>,
-    iter: TwoMergeIterator<TxnLocalIterator, FusedIterator<LsmIterator>>,
+    iter: FusedIterator<LsmIterator>,
 }
 
 impl TxnIterator {
-    pub fn create(
-        txn: Arc<Transaction>,
-        iter: TwoMergeIterator<TxnLocalIterator, FusedIterator<LsmIterator>>,
-    ) -> Result<Self> {
-        unimplemented!()
+    pub fn create(txn: Arc<Transaction>, iter: FusedIterator<LsmIterator>) -> Result<Self> {
+        let iter = TxnIterator { _txn: txn, iter };
+        Ok(iter)
     }
 }
 
@@ -119,7 +115,7 @@ impl StorageIterator for TxnIterator {
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        self.iter.next()
     }
 
     fn num_active_iterators(&self) -> usize {

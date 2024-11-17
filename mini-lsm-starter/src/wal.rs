@@ -47,7 +47,7 @@ impl Wal {
             let key_bytes = Bytes::copy_from_slice(&buf[..key_len]);
             buf.advance(key_len);
 
-            hasher.update(&buf[..4]);
+            hasher.update(&buf[..8]);
             let ts = buf.get_u64();
             let key = KeyBytes::from_bytes_with_ts(key_bytes, ts);
 

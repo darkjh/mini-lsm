@@ -20,15 +20,19 @@ pub struct LsmIterator {
     inner: LsmIteratorInner,
     upper: Bound<Bytes>,
     prev_key: Vec<u8>,
+    read_ts: u64,
 }
 
 impl LsmIterator {
-    pub(crate) fn new(iter: LsmIteratorInner, upper: Bound<Bytes>) -> Result<Self> {
+    pub(crate) fn new(iter: LsmIteratorInner, upper: Bound<Bytes>, read_ts: u64) -> Result<Self> {
         let mut lsm_iter = Self {
             inner: iter,
             upper,
             prev_key: Vec::new(),
+            read_ts,
         };
+
+        lsm_iter.skip_newer_ts()?;
         lsm_iter.move_to_next_key()?;
 
         Ok(lsm_iter)
@@ -42,12 +46,26 @@ impl LsmIterator {
         }
     }
 
+    fn inner_next(&mut self) -> Result<()> {
+        self.inner.next()?;
+        self.skip_newer_ts()?;
+        Ok(())
+    }
+
+    // skip keys with ts > read_ts
+    fn skip_newer_ts(&mut self) -> Result<()> {
+        while self.inner.is_valid() && self.inner.key().ts() > self.read_ts {
+            self.inner.next()?;
+        }
+        Ok(())
+    }
+
     // if a key with the same value is found, move to the next key
     // also skip delete tombstones as it's the final result of scan
     fn move_to_next_key(&mut self) -> Result<()> {
         loop {
             while self.inner.is_valid() && self.prev_key == self.inner.key().key_ref() {
-                self.inner.next()?;
+                self.inner_next()?;
             }
             if !self.inner.is_valid() {
                 break;
@@ -80,7 +98,7 @@ impl StorageIterator for LsmIterator {
     }
 
     fn next(&mut self) -> Result<()> {
-        self.inner.next()?;
+        self.inner_next()?;
         self.move_to_next_key()?;
         Ok(())
     }
