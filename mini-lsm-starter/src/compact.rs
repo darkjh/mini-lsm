@@ -307,57 +307,33 @@ impl LsmStorageInner {
                 is_same_key = true;
             }
 
-            if iter.key().ts() <= watermark {
+            let current_ts = iter.key().ts();
+
+            if current_ts <= watermark {
                 latest_ts_below_watermark = max(latest_ts_below_watermark, iter.key().ts());
             }
-
+            // only skip deleted entries when compacting to bottommost level
             let is_delete = iter.value().is_empty() && compact_to_bottom_level;
-
-            // TODO document and simplify
-
-            // TODO deletion from higher ts should not impact lower ts that is still above or equal the watermark
-            // because there could be transactions still using the key with lower ts
 
             // compaction with mvcc watermark keep entries
             // - if a version of a key is above watermark, keep it
             // - for all versions of a key below or equal to the watermark, keep the latest version
-            if iter.key().ts() > watermark || iter.key().ts() == latest_ts_below_watermark {
+            if current_ts > watermark || current_ts == latest_ts_below_watermark {
                 if is_delete {
-                    if iter.key().ts() > watermark {
-                        // println!(
-                        //     "keep key {:?} @ {:?}, value {:?}",
-                        //     std::str::from_utf8(iter.key().key_ref()).unwrap(),
-                        //     iter.key().ts(),
-                        //     std::str::from_utf8(iter.value()).unwrap(),
-                        // );
+                    if current_ts > watermark {
                         builder.add(iter.key(), iter.value());
                         added_count += 1;
-                    } else {
-                        // println!(
-                        //     "skip deleted key {:?} @ {:?}, value {:?}, latest ts below watermark {:?}",
-                        //     std::str::from_utf8(iter.key().key_ref()).unwrap(),
-                        //     iter.key().ts(),
-                        //     std::str::from_utf8(iter.value()).unwrap(),
-                        //     latest_ts_below_watermark
-                        // );
                     }
+                    // deletion from higher ts should not impact lower ts that is still above or equal the watermark
+                    // because there could be transactions still using the key with lower ts
+
+                    // if a delete entry has the same ts as the watermark, it can be skipped because
+                    // - entries of lower ts are below watermark, they will be skipped
+                    // - a reader with the watermark ts will not see the deleted entry anyway
                 } else {
-                    // println!(
-                    //     "keep key {:?} @ {:?}, value {:?}",
-                    //     std::str::from_utf8(iter.key().key_ref()).unwrap(),
-                    //     iter.key().ts(),
-                    //     std::str::from_utf8(iter.value()).unwrap(),
-                    // );
                     builder.add(iter.key(), iter.value());
                     added_count += 1;
                 }
-            } else {
-                // println!(
-                //     "skip key {:?} @ {:?}, value {:?}",
-                //     std::str::from_utf8(iter.key().key_ref()).unwrap(),
-                //     iter.key().ts(),
-                //     std::str::from_utf8(iter.value()).unwrap(),
-                // );
             }
 
             // TODO if skip key, could also skip this part
