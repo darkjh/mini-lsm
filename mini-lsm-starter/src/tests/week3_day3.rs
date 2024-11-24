@@ -3,7 +3,6 @@ use std::ops::Bound;
 use bytes::Bytes;
 use tempfile::tempdir;
 
-use crate::iterators::StorageIterator;
 use crate::{
     compact::CompactionOptions,
     key::KeySlice,

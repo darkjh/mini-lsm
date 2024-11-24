@@ -1,5 +1,5 @@
 pub mod txn;
-mod watermark;
+pub(crate) mod watermark;
 
 use crossbeam_skiplist::SkipMap;
 use parking_lot::Mutex;
@@ -55,11 +55,12 @@ impl LsmMvccInner {
     pub fn new_txn(&self, inner: Arc<LsmStorageInner>, _serializable: bool) -> Arc<Transaction> {
         let txn = Transaction {
             read_ts: self.latest_commit_ts(),
-            inner,
+            inner: inner.clone(),
             local_storage: Arc::new(SkipMap::new()),
             committed: Arc::new(AtomicBool::new(false)),
             key_hashes: None,
         };
+        inner.mvcc().ts.lock().1.add_reader(txn.read_ts);
         Arc::new(txn)
     }
 }

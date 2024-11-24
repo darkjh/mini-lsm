@@ -2,6 +2,7 @@ mod leveled;
 mod simple_leveled;
 mod tiered;
 
+use std::cmp::max;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -146,7 +147,7 @@ impl LsmStorageInner {
                     };
 
                     let iter = TwoMergeIterator::create(upper_iters, lower_iters)?;
-                    self.sst_tables_from_iter(iter)
+                    self.sst_tables_from_iter(iter, task.compact_to_bottom_level())
                 } else {
                     // L0 compaction
                     // L0 is not a sorted run, cannot use a concat iterator
@@ -174,7 +175,7 @@ impl LsmStorageInner {
                     };
 
                     let iter = TwoMergeIterator::create(l0_iters, lower_iters)?;
-                    self.sst_tables_from_iter(iter)
+                    self.sst_tables_from_iter(iter, task.compact_to_bottom_level())
                 }
             }
             CompactionTask::Tiered(TieredCompactionTask { tiers, .. }) => {
@@ -191,7 +192,7 @@ impl LsmStorageInner {
                 }
                 let iter = MergeIterator::create(iters);
 
-                self.sst_tables_from_iter(iter)
+                self.sst_tables_from_iter(iter, task.compact_to_bottom_level())
             }
             CompactionTask::Simple(SimpleLeveledCompactionTask {
                 upper_level,
@@ -218,7 +219,7 @@ impl LsmStorageInner {
                     )?;
 
                     let iter = TwoMergeIterator::create(upper_iters, lower_iters)?;
-                    self.sst_tables_from_iter(iter)
+                    self.sst_tables_from_iter(iter, task.compact_to_bottom_level())
                 } else {
                     // L0 compaction
                     // L0 is not a sorted run, cannot use a concat iterator
@@ -244,7 +245,7 @@ impl LsmStorageInner {
                     )?;
 
                     let iter = TwoMergeIterator::create(l0_iters, lower_iters)?;
-                    self.sst_tables_from_iter(iter)
+                    self.sst_tables_from_iter(iter, task.compact_to_bottom_level())
                 }
             }
             CompactionTask::ForceFullCompaction {
@@ -266,7 +267,7 @@ impl LsmStorageInner {
                     MergeIterator::create(iters?)
                 };
 
-                self.sst_tables_from_iter(iter)
+                self.sst_tables_from_iter(iter, task.compact_to_bottom_level())
             }
         }
     }
@@ -284,6 +285,7 @@ impl LsmStorageInner {
     fn sst_tables_from_iter(
         &self,
         mut iter: impl for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>,
+        compact_to_bottom_level: bool,
     ) -> Result<Vec<Arc<SsTable>>> {
         let mut builder = SsTableBuilder::new(self.options.block_size);
         let mut result = vec![];
@@ -292,17 +294,74 @@ impl LsmStorageInner {
         let mut current_key = Vec::new();
         let mut is_same_key = false;
 
+        let watermark = self.mvcc().watermark();
+        let mut latest_ts_below_watermark = 0u64;
+        // println!("watermark: {:?}", watermark);
+
         while iter.is_valid() {
             if iter.key().key_ref() != current_key {
                 is_same_key = false;
                 current_key = iter.key().key_ref().to_vec();
+                latest_ts_below_watermark = 0u64;
             } else {
                 is_same_key = true;
             }
 
-            builder.add(iter.key(), iter.value());
-            added_count += 1;
+            if iter.key().ts() <= watermark {
+                latest_ts_below_watermark = max(latest_ts_below_watermark, iter.key().ts());
+            }
 
+            let is_delete = iter.value().is_empty() && compact_to_bottom_level;
+
+            // TODO document and simplify
+
+            // TODO deletion from higher ts should not impact lower ts that is still above or equal the watermark
+            // because there could be transactions still using the key with lower ts
+
+            // compaction with mvcc watermark keep entries
+            // - if a version of a key is above watermark, keep it
+            // - for all versions of a key below or equal to the watermark, keep the latest version
+            if iter.key().ts() > watermark || iter.key().ts() == latest_ts_below_watermark {
+                if is_delete {
+                    if iter.key().ts() > watermark {
+                        // println!(
+                        //     "keep key {:?} @ {:?}, value {:?}",
+                        //     std::str::from_utf8(iter.key().key_ref()).unwrap(),
+                        //     iter.key().ts(),
+                        //     std::str::from_utf8(iter.value()).unwrap(),
+                        // );
+                        builder.add(iter.key(), iter.value());
+                        added_count += 1;
+                    } else {
+                        // println!(
+                        //     "skip deleted key {:?} @ {:?}, value {:?}, latest ts below watermark {:?}",
+                        //     std::str::from_utf8(iter.key().key_ref()).unwrap(),
+                        //     iter.key().ts(),
+                        //     std::str::from_utf8(iter.value()).unwrap(),
+                        //     latest_ts_below_watermark
+                        // );
+                    }
+                } else {
+                    // println!(
+                    //     "keep key {:?} @ {:?}, value {:?}",
+                    //     std::str::from_utf8(iter.key().key_ref()).unwrap(),
+                    //     iter.key().ts(),
+                    //     std::str::from_utf8(iter.value()).unwrap(),
+                    // );
+                    builder.add(iter.key(), iter.value());
+                    added_count += 1;
+                }
+            } else {
+                // println!(
+                //     "skip key {:?} @ {:?}, value {:?}",
+                //     std::str::from_utf8(iter.key().key_ref()).unwrap(),
+                //     iter.key().ts(),
+                //     std::str::from_utf8(iter.value()).unwrap(),
+                // );
+            }
+
+            // TODO if skip key, could also skip this part
+            // keep the same key in the same sst
             if !is_same_key && builder.estimated_size() >= self.options.target_sst_size {
                 let sst = self.build_sst_table(builder)?;
                 result.push(sst);
