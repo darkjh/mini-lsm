@@ -1,17 +1,19 @@
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
+use crate::lsm_storage::WriteBatchRecord;
 use crate::mem_table::map_bound;
 use crate::{
     iterators::StorageIterator,
     lsm_iterator::{FusedIterator, LsmIterator},
     lsm_storage::LsmStorageInner,
 };
-use anyhow::Result;
+use anyhow::{bail, Result};
 use bytes::Bytes;
 use crossbeam_skiplist::map::Entry;
 use crossbeam_skiplist::SkipMap;
 use ouroboros::self_referencing;
 use parking_lot::Mutex;
 use std::ops::Deref;
+use std::sync::atomic::Ordering;
 use std::{
     collections::HashSet,
     ops::Bound,
@@ -29,6 +31,8 @@ pub struct Transaction {
 
 impl Transaction {
     pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
+        self.error_if_committed()?;
+
         match self.local_storage.get(key) {
             Some(entry) => {
                 if entry.value().is_empty() {
@@ -42,15 +46,23 @@ impl Transaction {
     }
 
     pub fn scan(self: &Arc<Self>, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> Result<TxnIterator> {
+        self.error_if_committed()?;
+
         let map = self.local_storage.clone();
-        let txn_local_iter = TxnLocalIteratorBuilder {
-            map,
-            iter_builder: |m: &Arc<SkipMap<Bytes, Bytes>>| {
-                m.range((map_bound(lower), map_bound(upper)))
-            },
-            item: (Bytes::new(), Bytes::new()),
-        }
-        .build();
+        let txn_local_iter = {
+            let mut iter = TxnLocalIteratorBuilder {
+                map,
+                iter_builder: |m: &Arc<SkipMap<Bytes, Bytes>>| {
+                    m.range((map_bound(lower), map_bound(upper)))
+                },
+                item: (Bytes::new(), Bytes::new()),
+            }
+            .build();
+            let first_entry =
+                iter.with_iter_mut(|iter| TxnLocalIterator::item_from_entry(iter.next()));
+            iter.with_mut(|fields| *fields.item = first_entry);
+            iter
+        };
 
         let iter = self.inner.scan_with_ts(lower, upper, self.read_ts)?;
 
@@ -60,17 +72,42 @@ impl Transaction {
     }
 
     pub fn put(&self, key: &[u8], value: &[u8]) {
+        self.error_if_committed().unwrap();
+
         self.local_storage
             .insert(Bytes::copy_from_slice(key), Bytes::copy_from_slice(value));
     }
 
     pub fn delete(&self, key: &[u8]) {
+        self.error_if_committed().unwrap();
+
         self.local_storage
             .insert(Bytes::copy_from_slice(key), Bytes::new());
     }
 
     pub fn commit(&self) -> Result<()> {
-        unimplemented!()
+        self.committed.store(true, Ordering::Release);
+
+        let mut batch = Vec::with_capacity(self.local_storage.len());
+        for entry in self.local_storage.iter() {
+            if entry.value().is_empty() {
+                batch.push(WriteBatchRecord::Del(entry.key().clone()));
+            } else {
+                batch.push(WriteBatchRecord::Put(
+                    entry.key().clone(),
+                    entry.value().clone(),
+                ));
+            }
+        }
+        self.inner.write_batch(&batch)?;
+        Ok(())
+    }
+
+    fn error_if_committed(&self) -> Result<()> {
+        if self.committed.load(Ordering::Acquire) {
+            bail!("cannot operate on committed txn!");
+        }
+        Ok(())
     }
 }
 
