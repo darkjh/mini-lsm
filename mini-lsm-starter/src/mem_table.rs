@@ -115,24 +115,30 @@ impl MemTable {
     /// In week 2, day 6, also flush the data to WAL.
     /// In week 3, day 5, modify the function to use the batch API.
     pub fn put(&self, key: KeySlice, value: &[u8]) -> Result<()> {
-        let size = key.key_len() + value.len();
-        // TODO can we avoid copying here ???
-        let bytes = Bytes::copy_from_slice(key.key_ref());
-        self.map.insert(
-            KeyBytes::from_bytes_with_ts(bytes, key.ts()),
-            Bytes::copy_from_slice(value),
-        );
-
-        self.approximate_size.fetch_add(size, Ordering::Relaxed);
-        if let Some(ref wal) = self.wal {
-            wal.put(key, value)?;
-        }
-        Ok(())
+        self.put_batch(&[(key, value)])
     }
 
     /// Implement this in week 3, day 5.
-    pub fn put_batch(&self, _data: &[(KeySlice, &[u8])]) -> Result<()> {
-        unimplemented!()
+    pub fn put_batch(&self, data: &[(KeySlice, &[u8])]) -> Result<()> {
+        let mut total_size = 0usize;
+        for (key, value) in data {
+            let size = key.key_len() + value.len();
+            // TODO can we avoid copying here ???
+            let bytes = Bytes::copy_from_slice(key.key_ref());
+            self.map.insert(
+                KeyBytes::from_bytes_with_ts(bytes, key.ts()),
+                Bytes::copy_from_slice(value),
+            );
+
+            total_size += size;
+        }
+
+        self.approximate_size
+            .fetch_add(total_size, Ordering::Relaxed);
+        if let Some(ref wal) = self.wal {
+            wal.put_batch(data)?;
+        }
+        Ok(())
     }
 
     pub fn sync_wal(&self) -> Result<()> {
