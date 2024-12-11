@@ -134,14 +134,14 @@ impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
 
     fn key(&self) -> Self::KeyType<'_> {
         if self.errored || !self.iter.is_valid() {
-            panic!("underlying iterator error")
+            panic!("fused iterator: underlying iterator error")
         }
         self.iter.key()
     }
 
     fn value(&self) -> &[u8] {
         if self.errored || !self.iter.is_valid() {
-            panic!("underlying iterator error")
+            panic!("fused iterator: underlying iterator error")
         }
         self.iter.value()
     }
