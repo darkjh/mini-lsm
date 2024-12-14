@@ -19,7 +19,7 @@ pub use simple_leveled::{
 };
 pub use tiered::{TieredCompactionController, TieredCompactionOptions, TieredCompactionTask};
 
-use crate::lsm_storage::{LsmStorageInner, LsmStorageState};
+use crate::lsm_storage::{CompactionFilter, LsmStorageInner, LsmStorageState};
 use crate::manifest::ManifestRecord;
 use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
@@ -247,9 +247,13 @@ impl LsmStorageInner {
 
         let watermark = self.mvcc().watermark();
         let mut latest_ts_below_watermark = 0u64;
-        // println!("watermark: {:?}", watermark);
 
-        while iter.is_valid() {
+        let filters = {
+            let guard = self.compaction_filters.lock();
+            guard.clone()
+        };
+
+        'outer: while iter.is_valid() {
             if iter.key().key_ref() != current_key {
                 is_same_key = false;
                 current_key = iter.key().key_ref().to_vec();
@@ -266,7 +270,7 @@ impl LsmStorageInner {
             // only skip deleted entries when compacting to bottommost level
             let is_delete = iter.value().is_empty() && compact_to_bottom_level;
 
-            // compaction with mvcc watermark keep entries
+            // compaction with mvcc watermark
             // - if a version of a key is above watermark, keep it
             // - for all versions of a key below or equal to the watermark, keep the latest version
             if current_ts > watermark || current_ts == latest_ts_below_watermark {
@@ -282,6 +286,20 @@ impl LsmStorageInner {
                     // - entries of lower ts are below watermark, they will be skipped
                     // - a reader with the watermark ts will not see the deleted entry anyway
                 } else {
+                    // check compaction filters
+                    if current_ts == latest_ts_below_watermark {
+                        for filter in &filters {
+                            match filter {
+                                CompactionFilter::Prefix(bs) => {
+                                    if iter.key().key_ref().starts_with(bs.as_ref()) {
+                                        iter.next()?;
+                                        continue 'outer;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     builder.add(iter.key(), iter.value());
                     added_count += 1;
                 }
