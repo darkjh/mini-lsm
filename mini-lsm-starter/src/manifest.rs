@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::compact::CompactionTask;
 use anyhow::{bail, Context, Result};
-use bytes::{Buf, BufMut, Bytes};
+use bytes::{Buf, BufMut};
 use parking_lot::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 

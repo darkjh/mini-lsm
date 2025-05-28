@@ -19,19 +19,21 @@ type LsmIteratorInner = TwoMergeIterator<
 pub struct LsmIterator {
     inner: LsmIteratorInner,
     upper: Bound<Bytes>,
+    prev_key: Vec<u8>,
+    read_ts: u64,
 }
 
 impl LsmIterator {
-    pub(crate) fn new(iter: LsmIteratorInner, upper: Bound<Bytes>) -> Result<Self> {
-        let mut lsm_iter = Self { inner: iter, upper };
+    pub(crate) fn new(iter: LsmIteratorInner, upper: Bound<Bytes>, read_ts: u64) -> Result<Self> {
+        let mut lsm_iter = Self {
+            inner: iter,
+            upper,
+            prev_key: Vec::new(),
+            read_ts,
+        };
 
-        // In case that first values are empty
-        while lsm_iter.is_valid() && lsm_iter.value().is_empty() {
-            match lsm_iter.next() {
-                Ok(_) => {}
-                Err(e) => return Err(e),
-            }
-        }
+        lsm_iter.skip_newer_ts()?;
+        lsm_iter.move_to_next_key()?;
 
         Ok(lsm_iter)
     }
@@ -43,17 +45,52 @@ impl LsmIterator {
             Bound::Excluded(up) => key >= up,
         }
     }
+
+    fn inner_next(&mut self) -> Result<()> {
+        self.inner.next()?;
+        self.skip_newer_ts()?;
+        Ok(())
+    }
+
+    // skip keys with ts > read_ts
+    fn skip_newer_ts(&mut self) -> Result<()> {
+        while self.inner.is_valid() && self.inner.key().ts() > self.read_ts {
+            self.inner.next()?;
+        }
+        Ok(())
+    }
+
+    // if a key with the same value is found, move to the next key
+    // also skip delete tombstones as it's the final result of scan
+    fn move_to_next_key(&mut self) -> Result<()> {
+        loop {
+            while self.inner.is_valid() && self.prev_key == self.inner.key().key_ref() {
+                self.inner_next()?;
+            }
+            if !self.inner.is_valid() {
+                break;
+            }
+            self.prev_key.clear();
+            self.prev_key.extend(self.inner.key().key_ref());
+
+            if !self.inner.value().is_empty() {
+                break;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl StorageIterator for LsmIterator {
     type KeyType<'a> = &'a [u8];
 
     fn is_valid(&self) -> bool {
-        self.inner.is_valid() && !self.is_out_of_bound(self.inner.key().raw_ref())
+        self.inner.is_valid() && !self.is_out_of_bound(self.inner.key().key_ref())
     }
 
     fn key(&self) -> &[u8] {
-        self.inner.key().into_inner()
+        self.inner.key().key_ref()
     }
 
     fn value(&self) -> &[u8] {
@@ -61,16 +98,9 @@ impl StorageIterator for LsmIterator {
     }
 
     fn next(&mut self) -> Result<()> {
-        loop {
-            match self.inner.next() {
-                Ok(_) => {
-                    if !self.inner.is_valid() || !self.inner.value().is_empty() {
-                        return Ok(());
-                    }
-                }
-                e @ Err(_) => return e,
-            }
-        }
+        self.inner_next()?;
+        self.move_to_next_key()?;
+        Ok(())
     }
 
     fn num_active_iterators(&self) -> usize {
@@ -104,14 +134,14 @@ impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
 
     fn key(&self) -> Self::KeyType<'_> {
         if self.errored || !self.iter.is_valid() {
-            panic!("underlying iterator error")
+            panic!("fused iterator: underlying iterator error")
         }
         self.iter.key()
     }
 
     fn value(&self) -> &[u8] {
         if self.errored || !self.iter.is_valid() {
-            panic!("underlying iterator error")
+            panic!("fused iterator: underlying iterator error")
         }
         self.iter.value()
     }

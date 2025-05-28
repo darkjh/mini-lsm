@@ -178,24 +178,6 @@ fn test_task2_storage_scan() {
     );
     check_lsm_iter_result_by_key(
         &mut storage
-            .scan(Bound::Included(b"3"), Bound::Unbounded)
-            .unwrap(),
-        vec![(Bytes::from("3"), Bytes::from("23333"))],
-    );
-    check_lsm_iter_result_by_key(
-        &mut storage
-            .scan(Bound::Excluded(b"3"), Bound::Unbounded)
-            .unwrap(),
-        Vec::new(),
-    );
-    check_lsm_iter_result_by_key(
-        &mut storage
-            .scan(Bound::Excluded(b"2"), Bound::Unbounded)
-            .unwrap(),
-        vec![(Bytes::from("3"), Bytes::from("23333"))],
-    );
-    check_lsm_iter_result_by_key(
-        &mut storage
             .scan(Bound::Included(b"1"), Bound::Included(b"2"))
             .unwrap(),
         vec![(Bytes::from("2"), Bytes::from("2333"))],
@@ -205,6 +187,21 @@ fn test_task2_storage_scan() {
             .scan(Bound::Excluded(b"1"), Bound::Excluded(b"3"))
             .unwrap(),
         vec![(Bytes::from("2"), Bytes::from("2333"))],
+    );
+    check_lsm_iter_result_by_key(
+        &mut storage
+            .scan(Bound::Included(b"0"), Bound::Included(b"1"))
+            .unwrap(),
+        vec![
+            (Bytes::from_static(b"0"), Bytes::from_static(b"2333333")),
+            (Bytes::from("00"), Bytes::from("2333")),
+        ],
+    );
+    check_lsm_iter_result_by_key(
+        &mut storage
+            .scan(Bound::Excluded(b"0"), Bound::Included(b"1"))
+            .unwrap(),
+        vec![(Bytes::from("00"), Bytes::from("2333"))],
     );
 }
 

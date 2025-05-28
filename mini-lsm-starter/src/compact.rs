@@ -1,9 +1,8 @@
-#![allow(dead_code)] // REMOVE THIS LINE after fully implementing this functionality
-
 mod leveled;
 mod simple_leveled;
 mod tiered;
 
+use std::cmp::max;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,7 +19,7 @@ pub use simple_leveled::{
 };
 pub use tiered::{TieredCompactionController, TieredCompactionOptions, TieredCompactionTask};
 
-use crate::lsm_storage::{LsmStorageInner, LsmStorageState};
+use crate::lsm_storage::{CompactionFilter, LsmStorageInner, LsmStorageState};
 use crate::manifest::ManifestRecord;
 use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
@@ -116,16 +115,21 @@ pub enum CompactionOptions {
 impl LsmStorageInner {
     fn compact(&self, task: &CompactionTask) -> Result<Vec<Arc<SsTable>>> {
         match task {
-            CompactionTask::Leveled(LeveledCompactionTask {
+            CompactionTask::Simple(SimpleLeveledCompactionTask {
+                upper_level,
+                upper_level_sst_ids,
+                lower_level: _,
+                lower_level_sst_ids,
+                ..
+            })
+            | CompactionTask::Leveled(LeveledCompactionTask {
                 upper_level,
                 upper_level_sst_ids,
                 lower_level: _,
                 lower_level_sst_ids,
                 ..
             }) => {
-                // TODO dedup
                 let snapshot = { self.state.read().clone() };
-
                 if upper_level.is_some() {
                     // non-L0 compaction
                     let upper_iters = {
@@ -148,7 +152,7 @@ impl LsmStorageInner {
                     };
 
                     let iter = TwoMergeIterator::create(upper_iters, lower_iters)?;
-                    self.sst_tables_from_iter(iter)
+                    self.sst_tables_from_iter(iter, task.compact_to_bottom_level())
                 } else {
                     // L0 compaction
                     // L0 is not a sorted run, cannot use a concat iterator
@@ -176,7 +180,7 @@ impl LsmStorageInner {
                     };
 
                     let iter = TwoMergeIterator::create(l0_iters, lower_iters)?;
-                    self.sst_tables_from_iter(iter)
+                    self.sst_tables_from_iter(iter, task.compact_to_bottom_level())
                 }
             }
             CompactionTask::Tiered(TieredCompactionTask { tiers, .. }) => {
@@ -193,61 +197,7 @@ impl LsmStorageInner {
                 }
                 let iter = MergeIterator::create(iters);
 
-                self.sst_tables_from_iter(iter)
-            }
-            CompactionTask::Simple(SimpleLeveledCompactionTask {
-                upper_level,
-                upper_level_sst_ids,
-                lower_level: _,
-                lower_level_sst_ids,
-                ..
-            }) => {
-                let snapshot = { self.state.read().clone() };
-                if upper_level.is_some() {
-                    // non-L0 compaction
-                    let upper_iters = SstConcatIterator::create_and_seek_to_first(
-                        upper_level_sst_ids
-                            .iter()
-                            .map(|sst_id| snapshot.sstables.get(sst_id).unwrap().clone())
-                            .collect(),
-                    )?;
-
-                    let lower_iters = SstConcatIterator::create_and_seek_to_first(
-                        lower_level_sst_ids
-                            .iter()
-                            .map(|sst_id| snapshot.sstables.get(sst_id).unwrap().clone())
-                            .collect(),
-                    )?;
-
-                    let iter = TwoMergeIterator::create(upper_iters, lower_iters)?;
-                    self.sst_tables_from_iter(iter)
-                } else {
-                    // L0 compaction
-                    // L0 is not a sorted run, cannot use a concat iterator
-                    let l0_iters = {
-                        let iters: Result<Vec<Box<SsTableIterator>>> = upper_level_sst_ids
-                            .iter()
-                            .map(|idx| {
-                                let iter = SsTableIterator::create_and_seek_to_first(
-                                    snapshot.sstables.get(idx).unwrap().clone(),
-                                )?;
-                                Ok(Box::new(iter))
-                            })
-                            .collect();
-                        MergeIterator::create(iters?)
-                    };
-
-                    // lower level must be a sorted run
-                    let lower_iters = SstConcatIterator::create_and_seek_to_first(
-                        lower_level_sst_ids
-                            .iter()
-                            .map(|sst_id| snapshot.sstables.get(sst_id).unwrap().clone())
-                            .collect(),
-                    )?;
-
-                    let iter = TwoMergeIterator::create(l0_iters, lower_iters)?;
-                    self.sst_tables_from_iter(iter)
-                }
+                self.sst_tables_from_iter(iter, task.compact_to_bottom_level())
             }
             CompactionTask::ForceFullCompaction {
                 l0_sstables,
@@ -268,7 +218,7 @@ impl LsmStorageInner {
                     MergeIterator::create(iters?)
                 };
 
-                self.sst_tables_from_iter(iter)
+                self.sst_tables_from_iter(iter, task.compact_to_bottom_level())
             }
         }
     }
@@ -286,18 +236,78 @@ impl LsmStorageInner {
     fn sst_tables_from_iter(
         &self,
         mut iter: impl for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>,
+        compact_to_bottom_level: bool,
     ) -> Result<Vec<Arc<SsTable>>> {
         let mut builder = SsTableBuilder::new(self.options.block_size);
         let mut result = vec![];
         let mut added_count = 0usize;
 
-        while iter.is_valid() {
-            if !iter.value().is_empty() {
-                builder.add(iter.key(), iter.value());
-                added_count += 1;
+        let mut current_key = Vec::new();
+        let mut is_same_key = false;
+
+        let watermark = self.mvcc().watermark();
+        let mut latest_ts_below_watermark = 0u64;
+
+        let filters = {
+            let guard = self.compaction_filters.lock();
+            guard.clone()
+        };
+
+        'outer: while iter.is_valid() {
+            if iter.key().key_ref() != current_key {
+                is_same_key = false;
+                current_key = iter.key().key_ref().to_vec();
+                latest_ts_below_watermark = 0u64;
+            } else {
+                is_same_key = true;
             }
 
-            if builder.estimated_size() >= self.options.target_sst_size {
+            let current_ts = iter.key().ts();
+
+            if current_ts <= watermark {
+                latest_ts_below_watermark = max(latest_ts_below_watermark, iter.key().ts());
+            }
+            // only skip deleted entries when compacting to bottommost level
+            let is_delete = iter.value().is_empty() && compact_to_bottom_level;
+
+            // compaction with mvcc watermark
+            // - if a version of a key is above watermark, keep it
+            // - for all versions of a key below or equal to the watermark, keep the latest version
+            if current_ts > watermark || current_ts == latest_ts_below_watermark {
+                if is_delete {
+                    if current_ts > watermark {
+                        builder.add(iter.key(), iter.value());
+                        added_count += 1;
+                    }
+                    // deletion from higher ts should not impact lower ts that is still above or equal the watermark
+                    // because there could be transactions still using the key with lower ts
+
+                    // if a delete entry has the same ts as the watermark, it can be skipped because
+                    // - entries of lower ts are below watermark, they will be skipped
+                    // - a reader with the watermark ts will not see the deleted entry anyway
+                } else {
+                    // check compaction filters
+                    if current_ts == latest_ts_below_watermark {
+                        for filter in &filters {
+                            match filter {
+                                CompactionFilter::Prefix(bs) => {
+                                    if iter.key().key_ref().starts_with(bs.as_ref()) {
+                                        iter.next()?;
+                                        continue 'outer;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    builder.add(iter.key(), iter.value());
+                    added_count += 1;
+                }
+            }
+
+            // TODO if skip key, could also skip this part
+            // keep the same key in the same sst
+            if !is_same_key && builder.estimated_size() >= self.options.target_sst_size {
                 let sst = self.build_sst_table(builder)?;
                 result.push(sst);
                 builder = SsTableBuilder::new(self.options.block_size);

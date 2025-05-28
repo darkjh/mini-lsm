@@ -1,8 +1,8 @@
-use std::{ops::Bound, sync::Arc};
-
 use bytes::Bytes;
+use std::{ops::Bound, sync::Arc};
 use tempfile::tempdir;
 
+use super::harness::{check_iter_result_by_key, expect_iter_error, MockIterator};
 use crate::{
     iterators::{merge_iterator::MergeIterator, StorageIterator},
     lsm_iterator::FusedIterator,
@@ -10,8 +10,6 @@ use crate::{
     mem_table::MemTable,
     tests::harness::check_lsm_iter_result_by_key,
 };
-
-use super::harness::{check_iter_result_by_key, expect_iter_error, MockIterator};
 
 #[test]
 fn test_task1_memtable_iter() {

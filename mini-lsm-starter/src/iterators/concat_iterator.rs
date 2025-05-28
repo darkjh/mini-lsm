@@ -26,12 +26,16 @@ impl SstConcatIterator {
             });
         }
 
-        let iter = SsTableIterator::create_and_seek_to_first(sstables[0].clone())?;
-        Ok(SstConcatIterator {
-            current: Some(iter),
-            next_idx: 1,
-            sstables,
-        })
+        let mut iter = {
+            let iter = SsTableIterator::create_and_seek_to_first(sstables[0].clone())?;
+            SstConcatIterator {
+                current: Some(iter),
+                next_idx: 1,
+                sstables,
+            }
+        };
+        iter.move_until_valid()?;
+        Ok(iter)
     }
 
     pub fn create_and_seek_to_key(sstables: Vec<Arc<SsTable>>, key: KeySlice) -> Result<Self> {
@@ -54,12 +58,34 @@ impl SstConcatIterator {
             });
         }
 
-        let iter = SsTableIterator::create_and_seek_to_key(sstables[idx].clone(), key)?;
-        Ok(SstConcatIterator {
-            current: Some(iter),
-            next_idx: idx + 1,
-            sstables,
-        })
+        let mut iter = {
+            let iter = SsTableIterator::create_and_seek_to_key(sstables[idx].clone(), key)?;
+            SstConcatIterator {
+                current: Some(iter),
+                next_idx: idx + 1,
+                sstables,
+            }
+        };
+        iter.move_until_valid()?;
+
+        Ok(iter)
+    }
+
+    fn move_until_valid(&mut self) -> Result<()> {
+        // if after the next() call, the current iterator is not valid anymore
+        // we need to make sure we move to the next iterator that is valid
+        while self.next_idx < self.sstables.len() && !self.current.as_ref().unwrap().is_valid() {
+            self.current = Some(SsTableIterator::create_and_seek_to_first(
+                self.sstables[self.next_idx].clone(),
+            )?);
+            self.next_idx += 1;
+        }
+
+        if self.next_idx > self.sstables.len() {
+            self.current = None;
+        }
+
+        Ok(())
     }
 }
 
@@ -80,20 +106,7 @@ impl StorageIterator for SstConcatIterator {
 
     fn next(&mut self) -> Result<()> {
         self.current.as_mut().unwrap().next()?;
-
-        // if after the next() call, the current iterator is not valid anymore
-        // we need to make sure we move to the next iterator that is valid
-        while self.next_idx < self.sstables.len() && !self.current.as_ref().unwrap().is_valid() {
-            self.current = Some(SsTableIterator::create_and_seek_to_first(
-                self.sstables[self.next_idx].clone(),
-            )?);
-            self.next_idx += 1;
-        }
-
-        if self.next_idx > self.sstables.len() {
-            self.current = None;
-        }
-
+        self.move_until_valid()?;
         Ok(())
     }
 
